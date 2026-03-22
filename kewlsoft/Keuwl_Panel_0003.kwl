@@ -1,0 +1,31 @@
+Keuwlsoft Bluetooth Electronics Panel File
+2023-03-08 22:04:08
+2
+
+*.kwl
+set_grid_size(13,7)
+add_text(7,0,large,L,Stepper,245,240,245,)
+add_text_box(9,0,2,L,000 1,245,240,245,D)
+add_text_box(7,2,2,L,100.00,245,240,245,C)
+add_text(0,0,large,L,LED %,245,240,245,)
+add_text_box(2,0,2,L,100.00,245,240,245,A)
+add_text(0,1,large,L,Det gain,245,240,245,)
+add_text_box(2,1,2,L,2.75,245,240,245,B)
+add_button(7,1,3,,d)
+add_button(8,1,13,,e)
+add_button(9,1,11,,E)
+add_button(10,1,2,,D)
+add_button(11,0,9,,f)
+add_button(10,2,2,,C)
+add_button(9,2,3,,c)
+add_button(11,2,6,,F)
+add_button(4,0,3,,a)
+add_button(5,0,2,,A)
+add_button(4,1,3,,b)
+add_button(5,1,2,,B)
+add_button(0,4,27,,N)
+add_led(11,1,1,F,0,0,0)
+add_led(0,2,2,j,0,0,0)
+add_roll_graph(2,3,5,0.0,57.0,100,N,Graph Title,X-Axis,Y-Axis,0,0,1,0,1,1,medium,none,1,1,42,97,222)
+add_monitor(7,3,5,L,3)
+set_panel_notes(,,,)

@@ -1,0 +1,51 @@
+ALLOCATION:
+IO02: thermistor analog in
+IO04: onewire tempsense (add 2k2-4k7 pull-up to 3.3V but can power from 5V)
+IO35(no internal pull-up): level sense low
+IO34(no internal pull-up): level sense high
+IO36(no internal pull-up): flow sense (delivery?)
+IO39(no internal pull-up): flow sense (recovery?)
+
+IO18(output relay active low): inlet
+IO19(output relay active low): drain
+IO23(output relay active low): delivery
+IO5(output relay): heater aux
+
+IO13(output power relay active low): heater
+IO12(output power relay active low): pump
+
+IO14(output signal): pump speed UND (replace with en1 for h-bridge board)
+IO27(output signal): pump speed INC (replace with pwm1 for h-bridge board)
+IO16,IO17: Rx HW comms bluetooth external
+IO25: pressure sense (analog in 0-3v3, resistor divider from 5v in cable)
+IO26: vent valve out
+TX0, RX0:  busy
+
+
+Snippets:
+GIOP34-39:  input only, no pull-up
+ESP32: Only pins that support both input & output have integrated pull-up and pull-down resistors. Input-only GPIOs 34-39 do not.
+All GPIO pins on esp32 can handle interrupts
+All pins that can act as outputs can be used as PWM pins (GPIOs 34 to 39 can't generate PWM)
+ADC2 required for wifi/bluetooth radio
+DS18B20: 2k2-4k7 pull-up to 3.3V with Vcc 5V is fine
+DS18B20: cannot be on input-only pin else devices cannot ask on bus 
+
+
+Notes:
+
+H-Bridge driver:  Presumably for unidirectional only need pwm1 and maybe en1 (3.3V fine), with motor between out1 and out2 terminals.  Use same two digital out pins as before
+
+Liquid level sensors (x2):
+Require Vin>=5v and output is digital 0-Vin. Interface board to put somewhere. Resistor divider needed for safe 3v3 input to esp32. 
+
+Thermistor temperature sensor:
+Circuitry required for safe <3v3 analog acquisition (plus software lookups)
+
+Gas solenoid:
+12v,330mA output
+
+
+WARNING:
+
+How is the 5v pressure sensor connected and can it damage the board with >3v3?
