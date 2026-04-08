@@ -61,6 +61,7 @@ void setup()
   setup_psens();
   //setup_heatertriac();
   setup_speedcontrol();
+  setup_tempcontrol();
 
   Serial.println("setup: calling setup_auto");
   setup_auto();
@@ -95,9 +96,9 @@ void loop() {
   loop_auto();
 
   // Actuation
+  loop_tempcontrol();
   loop_heaters();
   loop_speedcontrol();
-  loop_tempcontrol();
   loop_pins();
   if( rpins_changed ) rpins_lastreport = 0;  // force report
 

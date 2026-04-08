@@ -64,3 +64,17 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 *   **Auto Functionality:** When using AUTO, allow real-time adjustment to find the "sweet spot".
 
 *   **Implementation:** Set up parameters only when *entering* a state or substate. Do not override manual tuning in the loop unless absolutely necessary.
+
+*   **Calibration States:** During long calibration/tuning processes (like `CALIBT`), manual overrides (e.g., for the inlet valve) should be possible unless they fundamentally conflict with the measurement being taken. State-entry logic should explicitly disable any automatic circuits that could interfere with manual GUI control.
+
+6\. Key State Machine Use Cases
+-------------------------------
+
+*   **`STATE_WARM` (Prepare):** The goal is to heat the water to the user's `temp_setpoint` and hold it there, ready for use. It uses a low-flow pulsing strategy for mixing. It does not auto-advance, prioritizing convenience over energy efficiency if left idle.
+
+*   **`STATE_WASH` (Shower):** This is the active showering state. It uses a PI controller on the delivery pump flow (`TCSPEED` mode) to tightly regulate the temperature around the `temp_setpoint`.
+
+7\. Current Development Focus
+-----------------------------
+
+*   **Single Pump Operation:** We are currently *not* doing anything related to single-pump operations (e.g., `STATE_SETUP1`, `STATE_WARM1`, `STATE_WASH1`, single pump auto-advances). There is no need to modify, refactor, or update any of these functions.

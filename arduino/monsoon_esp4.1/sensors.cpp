@@ -279,7 +279,7 @@ void setup_flowsens(void)
   attachInterrupt(digitalPinToInterrupt(FSPINS[0]), flowISR0, RISING);
   attachInterrupt(digitalPinToInterrupt(FSPINS[1]), flowISR1, RISING);
 
-  flow_thr0 = flow_thr1 = 4;
+  flow_thr0 = flow_thr1 = 1.5;
   flow_lastlt0 = 0;  flow_lastlt1 = 0;
   flow_lastht0 = 0;  flow_lastht1 = 0;
 //  flow_lasts0 = flow_lasts1 = 0;
@@ -371,7 +371,7 @@ int rlevdsens;
 void setup_rlevsens(void)
 {
   //rlSerial.begin(9600); 
-  rlSerial.begin(9600, SERIAL_8N1, 32, 33);
+  rlSerial.begin(9600, SERIAL_8N1, RLEVRXPIN, RLEVTXPIN);
 }
 
 void loop_rlevsens(void)

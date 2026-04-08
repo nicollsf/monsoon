@@ -4,6 +4,7 @@
 #include "system.h"
 #include "gui.h"
 #include <Preferences.h>
+#include "auto.h"
 
 
 // ----------------------------------------------------------------------
@@ -13,8 +14,6 @@
 // Heaters and corresponding level sensor protection
 int htrs_enable = 1;  // default enabled
 int htrs_forcedisable = 0;
-int htrs_blocked = 0;
-unsigned long htrblkd_stime;
 int htrs_changed;  // check after call to function
 float htrs_maxtemp = 62.5;
 
@@ -29,14 +28,10 @@ void loop_heaters(void)
   if( !htrs_enable || htrs_forcedisable || !level_safe || !temp_safe ) {
     if( getrelay(RPHEATER)==RON || getrelay(RPHEATERA)==RON ) {
       setrelay(RPHEATER, ROFF);  setrelay(RPHEATERA, ROFF);
-      rpins_changed = 1;  htrs_changed = 1;  htrblkd_stime = millis();  htrs_blocked = 1; 
+      rpins_changed = 1;  htrs_changed = 1;
     }
     return;
   }
-
-  // Debounce
-  if( htrs_blocked && millis()-htrblkd_stime>3000 ) htrs_blocked = 0;
-  if( htrs_blocked ) return;
 
   int heater_pins[] = {RPHEATER, RPHEATERA};
   for( int i=0; i<2; i++ ) {
@@ -46,7 +41,7 @@ void loop_heaters(void)
 
     if( target_state!=current_state ) {
       setrelay(pin, target_state);
-      rpins_changed = 1;  htrs_changed = 1;  htrblkd_stime = millis();  htrs_blocked = 1;
+      rpins_changed = 1;  htrs_changed = 1;
     }
   }
 
@@ -199,9 +194,22 @@ void loop_speedcontrol(void)
   analogWrite(SC_PWM0, sc_pwmw[0]);
   analogWrite(SC_PWM1, sc_pwmw[1]);
 
-  // For legacy reasons there is one relay to enable both pumps
-  if( RPUMP_EN[0] || RPUMP_EN[1] ) setrelay_en(RPPUMP, RON);
-  else setrelay_en(RPPUMP, ROFF);
+  // Manage the main pump power relay
+  static bool pumps_were_active = false;
+  static int last_rpins_reset_cnt = 0;
+  bool pumps_active = (RPUMP_EN[0] == RON && sc_setperc[0] > 0.0f) || 
+                      (RPUMP_EN[1] == RON && sc_setperc[1] > 0.0f);
+                      
+  bool system_was_reset = (rpins_reset_cnt != last_rpins_reset_cnt);
+  last_rpins_reset_cnt = rpins_reset_cnt;
+
+  // Edge-triggering allows manual control to override without constant interference
+  if( (pumps_active && !pumps_were_active) || (pumps_active && system_was_reset) ) {
+    setrelay_en(RPPUMP, RON);
+  } else if( (!pumps_active && pumps_were_active) || (!pumps_active && system_was_reset) ) {
+    setrelay_en(RPPUMP, ROFF);
+  }
+  pumps_were_active = pumps_active;
 }
 
 
@@ -273,6 +281,12 @@ float getpwmFromlpm(float targetlpm, pumpmodel m) {
 }
 
 void setpump_lpm(int rpump, float lpm) {
+  // Hard safety limit on delivery pump flow rate.
+  const float MAX_DELIVERY_LPM = 6.0f;
+  if (rpump == RPUMPD && lpm > MAX_DELIVERY_LPM) {
+    lpm = MAX_DELIVERY_LPM;
+  }
+
   if (lpm <= 0.05) {
     setpump_perc(rpump, 0);
     return;
@@ -295,8 +309,22 @@ void setpump_lpm(int rpump, float lpm) {
 
 TCMODE temp_controlmode = TCNONE;
 TCMODE temp_controlmodelast = TCNONE;
-float temp_setpoint = 40.0;
+float temp_setpoint = 50.0;
 //float temp_reqsetpoint = temp_setpoint;
+
+void setup_tempcontrol(void) {
+  Preferences prefs;
+  prefs.begin("temp_control", true);
+  temp_setpoint = prefs.getFloat("setpoint", 50.0);
+  prefs.end();
+}
+
+void save_temp_setpoint(void) {
+  Preferences prefs;
+  prefs.begin("temp_control", false);
+  prefs.putFloat("setpoint", temp_setpoint);
+  prefs.end();
+}
 
 // Cases
 void setup_tempcontrolwithheater(void);
@@ -330,7 +358,13 @@ void loop_tempcontrol(void)
       loop_tempcontrolwithheater();
       break;
     case TCSPEED:
-      if( htrs_enable ) loop_tempcontrolwithspeed();
+      if( htrs_enable ) {
+        // In TCSPEED mode, heaters are on by default, and PID controls flow.
+        // The bang-bang controller is disabled to prevent interference.
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
+        loop_tempcontrolwithspeed();
+      }
       break;
   }
 }
@@ -345,16 +379,25 @@ void setup_tempcontrolwithheater(void) {
 
 void loop_tempcontrolwithheater(void)
 {
-  // Bang-bang control loop
-  if( temp1<temp_setpoint ) {
-    //Serial.println("In loop_tempcontrolwithheater: HEATERS ON");
+  float target = temp_setpoint;
+  
+  // Boost the setpoint by 2 degrees during WARM states to build thermal inertia.
+  // This compensates for the temperature drop when transitioning to WASH.
+  if (auto_state == STATE_WARM || auto_state == STATE_WARM1) {
+    target += 2.0;
+  }
+
+  const float TOLERANCE = 2.0; // +/- 2 degrees around target
+  
+  // Bang-bang control with hysteresis band
+  if( temp1 < target - TOLERANCE ) {
     setrelay_en(RPHEATER, RON);
     setrelay_en(RPHEATERA, RON);
-  } else {
-    //Serial.println("In loop_tempcontrolwithheater: HEATERS OFF");
+  } else if ( temp1 > target + TOLERANCE ) {
     setrelay_en(RPHEATER, ROFF);
     setrelay_en(RPHEATERA, ROFF);
   }
+  // If inside the deadband, do nothing to prevent relay chatter.
 }
 
 // ----------------------------------------------------------------------
@@ -362,14 +405,32 @@ void loop_tempcontrolwithheater(void)
 // ----------------------------------------------------------------------
 #include <PID_v1.h>
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-double tc_Kp = -2, tc_Ki = 0, tc_Kd = 0;  // tuning parameters
-PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, DIRECT);
+// PID tuning parameters. Based on system response data from CALIBT.
+// Controller is DIRECT, but Kp is negative. An increase in temp (input) causes a more negative
+// error, which when multiplied by a negative Kp, increases the output (flow) to cool the system.
+// The Integral (I) term is necessary to eliminate steady-state error.
+// The Derivative (D) term is set to zero as it can amplify sensor noise in a slow thermal
+// system, causing erratic pump behavior.
+// NOTE: The previous implementation used DIRECT mode with negative gains. This is non-standard and
+// was causing the integral term to wind-up incorrectly, pinning the output at the minimum.
+// The correct implementation for this system (where a negative error results in an increased
+// output) is REVERSE mode with positive gains.
+// Detuned for a system with ~30s thermal dead time.
+double tc_Kp = 0.5, tc_Ki = 0.02, tc_Kd = 0.0;
+PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 void setup_tempcontrolwithspeed(void)
 {
+  // Set the target temperature for the PID controller.
   tc_pidsetpoint = temp_setpoint;
+  // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(10, 100); 
+  // Set the output limits in Litres Per Minute (LPM).
+  // Constrained to 3-6 LPM to prevent extreme over-correction and thermal shock.
+  myPID.SetOutputLimits(3.0, 6.0); 
+  // Evaluate less frequently (every 2 seconds) to better match the thermal inertia
+  // of the water mass and prevent rapid micro-adjustments.
+  myPID.SetSampleTime(2000);
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -377,5 +438,5 @@ void loop_tempcontrolwithspeed(void)
   tc_pidsetpoint = temp_setpoint;  
   if( temp1>-500.0 ) tc_pidinput = temp1;
   myPID.Compute(); 
-  setpump_perc(RPUMPD, tc_pidoutput);
+  setpump_lpm(RPUMPD, tc_pidoutput);
 }

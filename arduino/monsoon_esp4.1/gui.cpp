@@ -92,7 +92,6 @@ void serialcmd(char cmd)
     } else {
       setpump_en(RPUMPD, !getpump_en(RPUMPD));
     }
-    if( getpump_en(RPUMPR) || getpump_en(RPUMPD) ) setrelay_en(RPPUMP, RON);
   }
 
   // Speed control set speed
@@ -121,15 +120,18 @@ void serialcmd(char cmd)
     switch ( auto_nextstate ) {
       case STATE_NONE:  auto_nextstate = STATE_OFF;  break;
       case STATE_OFF:  auto_nextstate = STATE_FILL;  break;
-      case STATE_FILL:  auto_nextstate = STATE_SETUP;  break;
-      case STATE_SETUP:  auto_nextstate = STATE_WARM;  break;
+      case STATE_FILL:  auto_nextstate = STATE_WARM;  break;
       case STATE_WARM:  auto_nextstate = STATE_WASH;  break;
-      case STATE_WASH:  auto_nextstate = STATE_SHUT;  break;
-      case STATE_SHUT:  auto_nextstate = STATE_EMPTY;  break;
-      case STATE_EMPTY:  auto_nextstate = STATE_CALIBP;  break;
+      case STATE_WASH:  auto_nextstate = STATE_RINSE;  break;
+      case STATE_RINSE: auto_nextstate = STATE_PAUSE;  break;
+      case STATE_PAUSE: auto_nextstate = STATE_SHUT;  break;
+      case STATE_SHUT:  auto_nextstate = STATE_CALIBP;  break;
       case STATE_CALIBP:  auto_nextstate = STATE_CALIBT;  break;
-      case STATE_CALIBT:  auto_nextstate = STATE_CALIBDUMP;  break;
+      case STATE_CALIBT:  auto_nextstate = STATE_CALIBDUMP; break;
       case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;  break;
+      case STATE_SETUP1: auto_nextstate = STATE_WARM1; break;
+      case STATE_WARM1:  auto_nextstate = STATE_WASH1; break;
+      case STATE_WASH1:  auto_nextstate = STATE_PAUSE; break;
     }
     btLog("Incrementing auto_nextstate to " + String(auto_statestrs[auto_nextstate]));
     report_state();
@@ -139,6 +141,8 @@ void serialcmd(char cmd)
   if( cmd=='u' || cmd=='U' ) {
     if( cmd=='u' ) temp_setpoint -= 0.5;
     else temp_setpoint += 0.5;
+    if( temp_setpoint>60.0 ) temp_setpoint = 40.0;
+    save_temp_setpoint();
   }
 
   // Enter next state
@@ -237,13 +241,13 @@ void report_tsvals()
   mstr += String(temp_setpoint) + "*";
   btSerial.println(mstr);
 
-//   if( auto_state==STATE_WARM && temp0>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
-  if( temp>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
-    Serial.println("temp,temp_setpoint=" + String(temp) + "," + String(temp_setpoint));
-    mstr = "*S*";
-    btSerial.println(mstr);
-    tsready_lastbeep = millis();
-  }
+ //if( auto_state==STATE_WARM && temp0>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
+ //if( temp>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
+ //  Serial.println("temp,temp_setpoint=" + String(temp) + "," + String(temp_setpoint));
+ //  mstr = "*S*";
+ //  btSerial.println(mstr);
+ //  tsready_lastbeep = millis();
+ //}
 
   tsvals_lastreport = millis();
 }

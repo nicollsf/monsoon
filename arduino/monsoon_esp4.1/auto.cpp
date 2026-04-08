@@ -12,7 +12,7 @@
 // ----------------------------------------------------------------------
 
 int auto_double = 1;  // main auto system mode
-const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "EMPTY", "CALIBP", "CALIBT", "CALIBDUMP", "WTF"};
+const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "RINSE", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "CALIBP", "CALIBT", "CALDUMP", "WTF"};
 auto_states auto_state = STATE_NONE;
 auto_states auto_nextstate = STATE_OFF;
 const char *autonone_statestrs[] = {"NONE", "WTF"};
@@ -76,20 +76,39 @@ void loop_autowoverflowopen(void)
 
 // Auto topup working tank
 int auto_wtopupenable = 0;
+unsigned long auto_wtopup_interval = 10000;
 unsigned long auto_wtopupopenstime = 0;
-//unsigned long auto_wtopuplasthightime = 0, auto_wtopuplastlowtime = 0;
+unsigned long auto_wtopuplasthightime = 0;
 
 void loop_autowtopup(void)
 {
-  if( !auto_wtopupenable ) return;
+  if( !auto_wtopupenable ) {
+    auto_wtopuplasthightime = millis(); // Keep timer reset while disabled
+    return;
+  }
 
-  if( getrelay_en(0)==RON && (level_high1 || millis()-auto_wtopupopenstime>1500) ) setrelay_en(0, ROFF);  // end open
-  if( millis()-auto_wtopupopenstime<10000 ) return;  // limit frequency
+  if( level_high1 ) {
+    auto_wtopuplasthightime = millis();
+  }
 
-  // Open inlet if level low
-  if( !level_high1 ) {
-    setrelay_en(0, RON);
-    auto_wtopupopenstime = millis();
+  // If the inlet relay is on, check if it needs to be turned off.
+  if( getrelay_en(RPINLET)==RON ) {
+    // Turn off if tank is full, or if a 2s auto-pulse has finished
+    bool auto_pulse_possibly_active = (millis() - auto_wtopupopenstime < auto_wtopup_interval);
+    if( level_high1 || (auto_pulse_possibly_active && millis()-auto_wtopupopenstime > 2000) ) {
+      setrelay_en(RPINLET, ROFF);  // end open
+    }
+  }
+
+  if( millis()-auto_wtopupopenstime<auto_wtopup_interval ) return;  // limit frequency
+
+  // Open inlet if it's been too long since tank was high AND we are trying to recover
+  if( !level_high1 && (millis() - auto_wtopuplasthightime > auto_wtopup_interval) ) {
+    if( getpump_en(RPUMPR) == RON && getrelay_en(RPINLET) == ROFF ) {
+      btLog("Auto-topup: Pan empty/not filling, injecting water burst.");
+      setrelay_en(RPINLET, RON);
+      auto_wtopupopenstime = millis();
+    }
   }
 }
 
@@ -176,25 +195,25 @@ void loop_autowbleed(void)
 }
 
 
-// Auto overflow working tank
+// Auto scavenge control
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) return;
+  if( millis()-auto_scavengecontrolstime<500 ) return; // limit update rate
 
-  if( level_high1 && flow_lpm0>flow_lpm1 && millis()-auto_scavengecontrolstime>=1000 ) {
-    setpump_perc(0, sc_setperc[0]-4);
-    auto_scavengecontrolstime = millis();
-    return;
+  if( level_high1 ) {
+    // Stop recovery if tank is full
+    if( getpump_en(RPUMPR) == RON ) setpump_en(RPUMPR, ROFF);
+  } else {
+    // Set recovery to delivery + 1 LPM
+    if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
+    setpump_lpm(RPUMPR, flow_lpm1 + 1.0f); 
   }
-    
-  if( millis()-auto_scavengecontrolstime>=1000 ) {
-    if( flow_lpm0<flow_lpm1 ) setpump_perc(0, sc_setperc[0]-1);
-    else setpump_perc(0, sc_setperc[0]+1);
-    auto_scavengecontrolstime = millis();
-  }
+  
+  auto_scavengecontrolstime = millis();
 }
 
 
@@ -219,6 +238,8 @@ void loop_autooff(void)
     case OFF_NONE:
       auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
       auto_wbleedenable = 1;  // safe pressure when under manual control
+      temp_controlmode = TCNONE; // Stop auto-thermostat from overriding manual GUI intent
+      htrs_enable = 1;           // Ensure state-machine allows manual heater firing
       setup_pins();
       auto_switchsubstate(OFF_RELEASE);
       break;
@@ -241,25 +262,31 @@ enum autofill_states {
   FILL_EMPTY,  // run system dry until no scavenge flow
   FILL_HALF,  // half fill working tank from mains
   FILL_FULL,  // full fill working tank from mains
+  FILL_PREPARE, // circulate and stabilise flow
   FILL_DONE
 };
-const char *autofill_statestrs[] = {"NONE", "EMPTY", "HALF", "FULL", "DONE", "WTF"};
+const char *autofill_statestrs[] = {"NONE", "EMPTY", "HALF", "FULL", "PREPARE", "DONE", "WTF"};
 void loop_autofill(void)
 {
+  static int last_substate = -1;
   if( auto_state!=STATE_FILL ) return;
   auto_substatestrs = autofill_statestrs;
+
+  bool just_entered = (last_substate != auto_substate);
+  last_substate = auto_substate;
 
   // Handle substates
   switch( auto_substate ) {
     case FILL_NONE:
-      btLog("Entering FILL_NONE");
-      auto_wbleedenable = 0;
-      //auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = 0;  // disable auto circuits
+      if( just_entered ) {
+        btLog("Entering FILL_NONE");
+        auto_wbleedenable = 0;
+      }
       auto_switchsubstate(FILL_FULL);
       break;
 
     case FILL_EMPTY:
-      btLog("loop_autofill:  FILL_EMPTY not implemented");
+      if( just_entered ) btLog("loop_autofill:  FILL_EMPTY not implemented");
       break;
 
     case FILL_HALF:  // half fill working tank from main inlet
@@ -272,13 +299,31 @@ void loop_autofill(void)
       auto_wbleedenable = 1;
       setrelay_en(RPINLET, RON);
 
-      if( level_high1 ) auto_switchsubstate(FILL_DONE);
+      if( level_high1 ) auto_switchsubstate(FILL_PREPARE);
+      break;
+
+    case FILL_PREPARE:
+      if( just_entered ) {
+        btLog("FILL: Starting circulation and stabilising flow.");
+        setpump_perc(RPUMPR, 100);
+        setpump_perc(RPUMPD, 40);
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_en(RPUMPD, RON);
+        auto_wtopupenable = 1;
+      }
+      
+      // Wait for the tank to be full AND for flow to be stable for 20s.
+      if( level_high1 && (millis() - flow_lastlt1 > 20000) ) {
+        btLog("System is full and flow is stable.");
+        auto_switchsubstate(FILL_DONE);
+      }
       break;
 
     case FILL_DONE:   
       if( auto_double ) {
-        btLog("FILL_DONE so switching to STATE_SETUP");
-        auto_switchstate(STATE_SETUP);
+        btLog("FILL_DONE so switching to STATE_WARM");
+        auto_switchstate(STATE_WARM);
       } else {
         btLog("FILL_DONE so switching to STATE_SETUP1");
         auto_switchstate(STATE_SETUP1);
@@ -289,174 +334,314 @@ void loop_autofill(void)
   return;
 }
 
-// Auto setup
-enum autosetup_states {
-  SETUP_NONE = 0,
-  SETUP_INIT,
-  SETUP_STABILISE,
-  SETUP_TOPUP,
-  SETUP_DONE
+// Auto warm
+enum autowarm_states {
+  WARM_NONE = 0,
+  WARM_PREPARE, // cycle water with heaters on to reach target temp
 };
-const char *autosetup_statestrs[] = {"NONE", "INIT", "STABILISE", "TOPUP", "DONE", "WTF"};
-void loop_autosetup(void)
+const char *autowarm_statestrs[] = {"NONE", "PREPARE", "WTF"};
+void loop_autowarm(void)
 {
   static int last_substate = -1;
-  if( auto_state!=STATE_SETUP ) return;
-  auto_substatestrs = autosetup_statestrs;
-
+  if( auto_state!=STATE_WARM ) return;
+  auto_substatestrs = autowarm_statestrs;
+  
   bool just_entered = (last_substate != auto_substate);
   last_substate = auto_substate;
 
   // Handle substates
   switch( auto_substate ) {
-    case SETUP_NONE:
-      btLog("Entering SETUP_NONE");
-      auto_switchsubstate(SETUP_INIT);
-      break;
-
-    case SETUP_INIT:
-      if( just_entered ) {
-        btLog("Entering SETUP_INIT");
-        setpump_perc(RPUMPR, 100);  setpump_perc(RPUMPD, 40);
-        setrelay_en(RPDELIVER, RON);  setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON);  
-        auto_wtopupenable = 1;
-      }
-      //Serial.println("flow_lastlt0,flow_lastlt1=" + String(flow_lastlt0) + "," + String(flow_lastlt1) + " (millis=" + String(millis()) + ")");
-      if( millis()-flow_lastlt1>20000 ) {
-        btLog("Scavenge flow detected so advancing to STABILISE");
-        auto_switchsubstate(SETUP_STABILISE);
-      }
-      break;
-
-    case SETUP_STABILISE:
-      if( just_entered ) {
-        btLog("Entering SETUP_STABILISE");
-        setrelay_en(RPDELIVER, RON);
-        setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON); 
-        auto_wtopupenable = 1;
-      }
-      if( level_high1 ) auto_switchsubstate(SETUP_DONE);
-      break;
-
-    case SETUP_TOPUP:
-      btLog("Entering SETUP_TOPUP");
-      setrelay_en(RPDELIVER, RON);
-      setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON); 
-      setrelay_en(RPINLET, RON);
-      if( level_high1 ) auto_switchsubstate(SETUP_DONE);
-      break;
-
-    case SETUP_DONE:   
-      btLog("SETUP_DONE so switching to STATE_WARM");
-      auto_switchstate(STATE_WARM);
-      break;
-  }
-
-  return;
-}
-
-// Auto warm
-enum autowarm_states {
-  WARM_NONE = 0,
-  WARM_CYCLE,  // cycle water with heaters on
-  WARM_WAIT,   // wait with heaters on
-  WARM_DRAIN,  // drain water with heaters on
-};
-const char *autowarm_statestrs[] = {"NONE", "CYCLE", "WAIT", "DRAIN", "WTF"};
-long int autowarm_waitperiod = 30000;
-long int autowarm_cycleperiod = 10000;
-long int autowarm_drainperiod = 10000;
-void loop_autowarm(void)
-{
-  if( auto_state!=STATE_WARM ) return;
-  auto_substatestrs = autowarm_statestrs;
-  
-  //temp_setpoint = temp_reqsetpoint + 4;  // warm to above setpoint
-
-  // Handle substates
-  switch( auto_substate ) {
     case WARM_NONE:
-      btLog("Entering WARM_NONE");
-      //auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = 0;  // disable auto circuits
-      temp_controlmode = TCHEATER;  // bang-bang temperature control
-      auto_switchsubstate(WARM_CYCLE);
+      if( just_entered ) {
+        btLog("Entering WARM_NONE: Preparing for shower.");
+        // Use bang-bang on heaters to reach and hold target temperature.
+        temp_controlmode = TCHEATER;
+        auto_wtopupenable = 1; // Keep tank full
+        auto_woverflowstopenable = 1; // Pause high-rate recovery when tank is full
+      }
+      auto_switchsubstate(WARM_PREPARE);
       break;
 
-    case WARM_WAIT:      
-      //if( auto_double ) setpump_en(RPUMPD, RON);
-      //setpump_en(RPUMPR, RON);
-      //setrelay_en(RPDELIVER, RON);
-      //auto_heaterenable = 1;  
-      //setrelay_en(RPHEATER, RON);  setrelay_en(RPHEATERA, RON);  
-      
-      btLog("Checking for warm interval elapsed");
-      if( millis()-auto_substatestime>=autowarm_waitperiod ) auto_switchsubstate(WARM_CYCLE);
-      break;
+    case WARM_PREPARE: {
+      static bool ready_logged = false;
+      float base_lpm = 0.10f * modeld.maxflow; // Low flow to minimise circuit heat loss
+      float pulse_lpm = 0.70f * modeld.maxflow; // Periodic pulse to guarantee mixing
+      unsigned long cycle_time = (millis() - auto_substatestime) % 30000; // 30s cycle
 
-    case WARM_CYCLE:
-      if( auto_double ) setpump_en(RPUMPD, RON);
-      setpump_en(RPUMPR, RON);
-      setrelay_en(RPDELIVER, RON);
-      //auto_heaterenable = 1;  
-      //setrelay_en(RPHEATER, RON);  setrelay_en(RPHEATERA, RON);  
+      if( just_entered ) {
+        btLog("WARM: Heating and mixing water. Target: " + String(temp_setpoint, 1) + "C");
+        setrelay_en(RPDELIVER, RON);  
+        setpump_en(RPUMPR, RON);  
+        setpump_en(RPUMPD, RON); 
+        setpump_perc(RPUMPR, 100); // Keep recovery pump high to clear pan
+        ready_logged = false;
+      }
 
-      btLog("Checking for warm cycle complete");
-      if( millis()-auto_substatestime>=autowarm_cycleperiod ) auto_switchsubstate(WARM_DRAIN);
-      break;
+      // Pulse flow for 5 seconds every 30 seconds for good mixing
+      if( cycle_time < 5000 ) {
+        setpump_lpm(RPUMPD, pulse_lpm);
+      } else {
+        setpump_lpm(RPUMPD, base_lpm);
+      }
 
-    case WARM_DRAIN:     
-      setpump_en(RPUMPR, RON);
-      //setrelay_en(RPDELIVER, RON);
-      //auto_heaterenable = 1;  
-      //setrelay_en(RPHEATER, RON);  setrelay_en(RPHEATERA, RON);  
-        
-      btLog("Checking for warm drain cycle complete");
-      if( millis()-auto_substatestime>=autowarm_drainperiod || level_high1 ) auto_switchsubstate(WARM_WAIT);
+      // Once temperature reaches the run setpoint, log it, but only once.
+      if (temp1 >= temp_setpoint && !ready_logged) {
+        btLog("Shower is ready. Temperature is at target. Advance to WASH state when ready.");
+        ready_logged = true;
+      }
+
+      // This state does not auto-advance. It holds the temperature until the user
+      // manually advances to STATE_WASH. This provides convenience at the cost of
+      // energy if left in this state for a long time.
+
+      // Foot advance: Step on drain to start shower
+      // Give the system 10 seconds to initially prime the pumps
+      if (millis() - auto_statestime >= 10000) {
+        // If recovery flow (sensor 1) has been low for 3 seconds
+        if (millis() - flow_lastht1 > 3000) {
+          btLog("Foot advance: No recovery flow detected, advancing to STATE_WASH");
+          auto_switchstate(STATE_WASH);
+        }
+      }
+
+      // Debug foot advance
+      static unsigned long last_fa_debug_warm = 0;
+      if (millis() - last_fa_debug_warm > 2000) {
+        last_fa_debug_warm = millis();
+        Serial.printf("FootAdvance DBG (WARM): state_time=%lu, flow1_age=%lu, flow1=%.2f\n", 
+           millis() - auto_statestime, millis() - flow_lastht1, flow_lpm1);
+      }
       break;
+    }
   }
-
   return;
 }
 
 // Auto wash
 enum autowash_states {
   WASH_NONE = 0,
+  WASH_OVERSCAVENGE,
   WASH_CYCLE
 };
-const char *autowash_statestrs[] = {"NONE", "CYCLE", "WTF"};
+const char *autowash_statestrs[] = {"NONE", "OVERSCAV", "CYCLE", "WTF"};
 void loop_autowash(void)
 {
+  static int last_substate = -1;
   if( auto_state!=STATE_WASH ) return;
   auto_substatestrs = autowash_statestrs;
 
+  bool just_entered = (last_substate != auto_substate);
+  last_substate = auto_substate;
+
   // Handle substates
-  //temp_setpoint = temp_reqsetpoint;
   switch( auto_substate ) {
     case WASH_NONE:
-      btLog("Entering WASH_NONE");
-      //auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = 0;  // disable auto circuits
-      auto_switchsubstate(WASH_CYCLE);
+      if( just_entered ) {
+        btLog("Entering WASH_NONE: Starting shower.");
+        // Use PID on flow and bang-bang on heaters to hold temperature.
+        temp_controlmode = TCSPEED;
+        auto_wtopupenable = 1; // Keep tank full
+        auto_wtopup_interval = 20000; // 20s topup interval during WASH
+        // Do not enable scavenge control yet; allow overscavenge first
+      }
+      auto_switchsubstate(WASH_OVERSCAVENGE);
       break;
+
+    case WASH_OVERSCAVENGE:
+      if( just_entered ) {
+        btLog("WASH: Overscavenging pan.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_perc(RPUMPR, 100); // Clear pan buildup
+      }
+      if (millis() - auto_substatestime > 5000) {
+        auto_switchsubstate(WASH_CYCLE);
+      }
+      break; 
 
     case WASH_CYCLE:
-      setrelay_en(RPDELIVER, RON);
-      setpump_en(RPUMPR, RON);  
-      if( auto_double ) setpump_en(RPUMPD, RON);
-      //auto_heaterenable = 1;  
-      //setrelay_en(RPHEATER, RON);  setrelay_en(RPHEATERA, RON);  
-      //auto_scavengecontrolenable = 1;
-      
-      // // Foot advance
-      // if( millis()-auto_statestime>=6000 ) {
-      //   if( flow_lasts1==0 && millis()-flow_lastch1>3000 ) {
-      //     btLog("No flow so advancing to STATE_calib");
-      //     auto_switchstate(STATE_FLUSHE);
-      //   }
-      // }
+      if( just_entered ) {
+        btLog("WASH: PID temperature control active.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        auto_scavengecontrolenable = 1; // Now dynamically manage recovery flow
+      }
+      // In this state, loop_tempcontrol() is handling both the heaters (bang-bang)
+      // and the delivery pump speed (PID) because temp_controlmode is TCSPEED.
+          // The recovery pump is managed by loop_autoscavengecontrol().
+
+      // PID Debug Logging
+      static unsigned long last_debug_log = 0;
+      if (millis() - last_debug_log > 10000) {
+        last_debug_log = millis();
+        Serial.printf("WASH_DBG: Setpoint=%.2f, Temp=%.2f, PID_Out(LPM)=%.2f, Pump_PWM=%.1f%%, Htr_En=%d, Htr_Act=%d\n",
+          temp_setpoint,
+          tc_pidinput,
+          tc_pidoutput,
+          sc_setperc[RPUMPD],
+          getrelay_en(RPHEATER),
+          getrelay(RPHEATER));
+      }
+
+      // Foot advance: Step on drain to stop recovery flow
+      // Give the system 10 seconds to initially prime the pumps
+      if (millis() - auto_statestime >= 10000) {
+        // If recovery flow (sensor 1) has been low for 3 seconds
+        if (millis() - flow_lastht1 > 3000) {
+          btLog("Foot advance: No recovery flow detected, advancing to STATE_RINSE");
+          auto_switchstate(STATE_RINSE);
+        }
+      }
+
+      // Debug foot advance
+      static unsigned long last_fa_debug_wash = 0;
+      if (millis() - last_fa_debug_wash > 2000) {
+        last_fa_debug_wash = millis();
+        Serial.printf("FootAdvance DBG (WASH): state_time=%lu, flow1_age=%lu, flow1=%.2f\n", 
+           millis() - auto_statestime, millis() - flow_lastht1, flow_lpm1);
+      }
       break;
   }
-
   return;
+}
+
+// Auto rinse
+enum autorinse_states {
+  RINSE_NONE = 0,
+  RINSE_PULSE_OFF,
+  RINSE_PULSE_ON,
+  RINSE_CYCLE
+};
+const char *autorinse_statestrs[] = {"NONE", "PULSE_OFF", "PULSE_ON", "CYCLE", "WTF"};
+void loop_autorinse(void)
+{
+  static int last_substate = -1;
+  if( auto_state!=STATE_RINSE ) return;
+  auto_substatestrs = autorinse_statestrs;
+
+  bool just_entered = (last_substate != auto_substate);
+  last_substate = auto_substate;
+
+  // Handle substates
+  switch( auto_substate ) {
+    case RINSE_NONE:
+      if( just_entered ) {
+        btLog("Entering RINSE_NONE: Starting incremental rinse.");
+        setrelay_en(RPDELIVER, RON); // Keep valve open during state transition
+        // Keep PID temperature control active
+        temp_controlmode = TCSPEED;
+        auto_wtopupenable = 1; 
+        auto_wtopup_interval = 5000; // 5s topup interval for fast recovery
+        // Do not enable scavenge control yet; allow overscavenge first
+      }
+      auto_switchsubstate(RINSE_PULSE_OFF);
+      break;
+
+    case RINSE_PULSE_OFF:
+      if( just_entered ) {
+        btLog("RINSE: Pulse indicator OFF. Overscavenging pan.");
+        setpump_en(RPUMPD, ROFF);
+        setpump_en(RPUMPR, RON);
+        setpump_perc(RPUMPR, 100); // Clear pan buildup
+      }
+      if( millis() - auto_substatestime > 1500 ) auto_switchsubstate(RINSE_PULSE_ON);
+      break;
+
+    case RINSE_PULSE_ON:
+      if( just_entered ) {
+        btLog("RINSE: Pulse indicator ON. Continuing overscavenge.");
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_perc(RPUMPR, 100); // Clear pan buildup
+      }
+      // Give it time to clear the pan completely before beginning drain cycles
+      if( millis() - auto_substatestime > 5000 ) auto_switchsubstate(RINSE_CYCLE);
+      break;
+
+    case RINSE_CYCLE:
+      if( just_entered ) {
+        btLog("RINSE: Periodic drain active.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        auto_scavengecontrolenable = 1; // Hand control back to matching logic
+      }
+
+      // Cycle drain valve: open for 2 seconds every 20 seconds
+      {
+        unsigned long cycle_time = (millis() - auto_substatestime) % 20000;
+        if( cycle_time < 2000 ) {
+          if (getrelay_en(RPDRAIN) == ROFF) setrelay_en(RPDRAIN, RON);
+        } else {
+          if (getrelay_en(RPDRAIN) == RON) setrelay_en(RPDRAIN, ROFF);
+        }
+      }
+
+      // Foot advance: Step on drain to stop recovery flow
+      // Give the system 10 seconds to initially prime the pumps
+      if (millis() - auto_statestime >= 10000) {
+        // If recovery flow (sensor 1) has been low for 3 seconds
+        if (millis() - flow_lastht1 > 3000) {
+          btLog("Foot advance: No recovery flow detected, advancing to STATE_PAUSE");
+          auto_switchstate(STATE_PAUSE);
+        }
+      }
+
+      // Debug foot advance
+      static unsigned long last_fa_debug_rinse = 0;
+      if (millis() - last_fa_debug_rinse > 2000) {
+        last_fa_debug_rinse = millis();
+        Serial.printf("FootAdvance DBG (RINSE): state_time=%lu, flow1_age=%lu, flow1=%.2f\n", 
+           millis() - auto_statestime, millis() - flow_lastht1, flow_lpm1);
+      }
+      break;
+  }
+  return;
+}
+
+// Auto pause
+enum autopause_states {
+  PAUSE_NONE = 0,
+  PAUSE_OVERSCAVENGE,
+  PAUSE_DONE
+};
+const char *autopause_statestrs[] = {"NONE", "OVERSCAV", "DONE", "WTF"};
+void loop_autopause(void)
+{
+  static int last_substate = -1;
+  if( auto_state!=STATE_PAUSE ) return;
+  auto_substatestrs = autopause_statestrs;
+
+  bool just_entered = (last_substate != auto_substate);
+  last_substate = auto_substate;
+
+  // Handle substates
+  switch( auto_substate ) {
+    case PAUSE_NONE:
+      if( just_entered ) btLog("Entering PAUSE_NONE");
+      auto_switchsubstate(PAUSE_OVERSCAVENGE);
+      break;
+
+    case PAUSE_OVERSCAVENGE:
+      if( just_entered ) {
+        btLog("PAUSE: Overscavenging pan before shutting down.");
+        setpump_perc(RPUMPR, 100);
+        setpump_en(RPUMPR, RON);
+      }
+      if( millis() - auto_substatestime > 5000 ) {
+        auto_switchsubstate(PAUSE_DONE);
+      }
+      break;
+
+    case PAUSE_DONE:
+      if( just_entered ) {
+        btLog("PAUSE: Idling.");
+        setup_pins(); // Force all relays off safely
+        temp_controlmode = TCNONE; 
+        htrs_enable = 1; 
+      }
+      break;
+  }
 }
 
 // Auto shut
@@ -471,9 +656,13 @@ const char *autoshut_statestrs[] = {"NONE", "DRAINTOSAFE", "DRAINTOEMPTY", "RINS
 int autoshut_rcycleinterval = 12000, autoshut_rcycleperiod = 5000;
 void loop_autoshut(void)
 {
+  static int last_substate = -1;
   if( auto_state!=STATE_SHUT ) return;
   auto_substatestrs = autoshut_statestrs;
   
+  bool just_entered = (last_substate != auto_substate);
+  last_substate = auto_substate;
+
   // Automatic transitions between substates
   switch( auto_substate ) {
     case SHUT_NONE:
@@ -483,13 +672,19 @@ void loop_autoshut(void)
       break;
 
     case SHUT_DRAINTOSAFE:
+      if( just_entered ) {
+        btLog("SHUT: Draining with high flow.");
+        setpump_perc(RPUMPR, 100);
+        setpump_perc(RPUMPD, 85);
+      }
       setrelay_en(RPDRAIN, RON);  
       setpump_en(RPUMPR, RON);
       if( auto_double ) setpump_en(RPUMPD, RON);
       
-      if( !level_high0 ) {
-        btLog("Level low so leaving DRAINTOSAFE");
-        auto_switchsubstate(SHUT_DONE);
+      // Use the more robust "empty" detection from the old STATE_EMPTY
+      if( millis()-auto_substatestime>20000 && psens0<15.0 && millis()-flow_lastht0>5000 && millis()-flow_lastht1>5000 ) {
+        btLog("SHUT_DRAINTOSAFE detected finish, system is empty.");
+        auto_switchsubstate(SHUT_DONE); // For now, just finish. Later this might go to SHUT_RINSE.
       }
 
       break;
@@ -501,46 +696,6 @@ void loop_autoshut(void)
 
   return;
 }
-
-// Auto empty
-enum autoempty_states {
-  EMPTY_NONE = 0,
-  EMPTY_DRAIN,
-  EMPTY_DONE
-};
-const char *autoempty_statestrs[] = {"NONE", "DRAIN", "DONE", "WTF"};
-void loop_autoempty(void)
-{
-  if( auto_state!=STATE_EMPTY ) return;
-  auto_substatestrs = autoempty_statestrs;
-  
-  // Automatic transitions between substates
-  switch( auto_substate ) {
-    case EMPTY_NONE:
-      btLog("Entering EMPTY_NONE");
-      //auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = 0;  // disable auto circuits
-      auto_switchsubstate(EMPTY_DRAIN);
-      break;
-
-    case EMPTY_DRAIN:
-      setrelay_en(RPDRAIN, RON);  
-      setpump_en(RPUMPR, RON);  
-      if( auto_double ) setpump_en(RPUMPD, RON); 
-
-      if( millis()-auto_substatestime>20000 && psens0<15.0 && millis()-flow_lastht0>5000 && millis()-flow_lastht1>5000 ) {
-        btLog("EMPTY_DRAIN detected finish");
-        auto_switchsubstate(EMPTY_DONE);
-      }
-      break;
-
-    case EMPTY_DONE:
-      auto_switchstate(STATE_OFF);
-      break;
-  }
-
-  return;
-}
-
 
 // ----------------------------------------------------------------------
 //   Auto states (single pump)
@@ -651,7 +806,7 @@ void loop_autowarm1(void)
       if( auto_double ) setpump_en(RPUMPR, RON);
       
       btLog("Checking for warm interval elapsed");
-      if( millis()-auto_substatestime>=autowarm1_waitperiod ) auto_switchsubstate(WARM_CYCLE);
+      if( millis()-auto_substatestime>=autowarm1_waitperiod ) auto_switchsubstate(WARM1_CYCLE);
       break;
 
     case WARM1_CYCLE:
@@ -662,14 +817,14 @@ void loop_autowarm1(void)
       if( auto_double ) setpump_en(RPUMPD, RON);
 
       btLog("Checking for warm cycle complete");
-      if( millis()-auto_substatestime>=autowarm_cycleperiod ) auto_switchsubstate(WARM1_DRAIN);
+      if( millis()-auto_substatestime>=autowarm1_cycleperiod ) auto_switchsubstate(WARM1_DRAIN);
       break;
 
     case WARM1_DRAIN:     
       setpump_en(RPUMPR, RON);
         
       btLog("Checking for warm drain cycle complete");
-      if( millis()-auto_substatestime>=autowarm_drainperiod ) auto_switchsubstate(WARM1_WAIT);
+      if( millis()-auto_substatestime>=autowarm1_drainperiod ) auto_switchsubstate(WARM1_WAIT);
       break;
   }
 
@@ -702,13 +857,15 @@ void loop_autowash1(void)
       setpump_en(RPUMPR, RON);  
       if( auto_double ) setpump_en(RPUMPD, RON);
       
-      // // Foot advance
-      // if( millis()-auto_statestime>=6000 ) {
-      //   if( flow_lasts1==0 && millis()-flow_lastch1>3000 ) {
-      //     btLog("No flow so advancing to STATE_FLUSHE");
-      //     auto_switchstate(STATE_FLUSHE);
-      //   }
-      // }
+      // Foot advance: Step on drain to stop flow
+      // Give the system 10 seconds to initially prime
+      if (millis() - auto_statestime >= 10000) {
+        // If flow (sensor 1) has been low for 3 seconds
+        if (millis() - flow_lastht1 > 3000) {
+          btLog("Foot advance: No flow detected, advancing to STATE_PAUSE");
+          auto_switchstate(STATE_PAUSE);
+        }
+      }
       break;
   }
 
@@ -734,16 +891,15 @@ void loop_auto(void)
   // States
   loop_autooff();
   loop_autofill();  
-  loop_autosetup();
   loop_autowarm();
   loop_autowarm1();
   loop_autowash();
   loop_autowash1();
+  loop_autorinse();
   // loop_autoflushempty();
   // loop_autoflushrefill();
-  // loop_autopause();
+  loop_autopause();
   loop_autoshut();
-  loop_autoempty();
   loop_calib();
 
   // Circuits
@@ -781,6 +937,11 @@ void auto_switchsubstate(int substate)
 
 void auto_switchstate(int state)
 {  
+  // If leaving CALIBT, archive the current log before switching.
+  if (auto_state == STATE_CALIBT && state != STATE_CALIBT) {
+    calib_archive_log();
+  }
+
   // Update total wash time when leaving wash
   if( auto_state==STATE_WASH && state!=STATE_WASH ) {
     unsigned long auto_totalwashtime;
@@ -801,16 +962,12 @@ void auto_switchstate(int state)
   switch( auto_state ) {
     case STATE_NONE:  auto_nextstate = STATE_OFF;  break;
     case STATE_OFF:  auto_nextstate = STATE_FILL;  break;
-    case STATE_FILL:  auto_nextstate = STATE_SETUP;  break;
-  //    if( auto_double ) auto_nextstate = STATE_SETUP;  
-  //    else auto_nextstate = STATE_SETUP1;
-  //    break;
-    case STATE_SETUP:  auto_nextstate = STATE_WARM;  break;
+    case STATE_FILL:  auto_nextstate = STATE_WARM;  break;
     case STATE_WARM:  auto_nextstate = STATE_WASH;  break;
-    case STATE_WASH:  auto_nextstate = STATE_PAUSE;  break;
+    case STATE_WASH:  auto_nextstate = STATE_RINSE;  break;
+    case STATE_RINSE: auto_nextstate = STATE_PAUSE;  break;
     case STATE_PAUSE:  auto_nextstate = STATE_SHUT;  break;
-    case STATE_SHUT:  auto_nextstate = STATE_EMPTY;  break;
-    case STATE_EMPTY:  auto_nextstate = STATE_CALIBP;  break;
+    case STATE_SHUT:  auto_nextstate = STATE_CALIBP;  break;
     case STATE_CALIBP:  auto_nextstate = STATE_CALIBT;  break;
     case STATE_CALIBT:
       auto_nextstate = STATE_CALIBDUMP;
@@ -819,14 +976,15 @@ void auto_switchstate(int state)
       setpump_en(RPUMPR, RON);
       break;
     case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;  break;
-
+        
     case STATE_SETUP1:  auto_nextstate = STATE_WARM1;  break;
     case STATE_WARM1:  auto_nextstate = STATE_WASH1;  break;
     case STATE_WASH1:  auto_nextstate = STATE_PAUSE;  break;
   }
 
   // Disable auto circuits
-  auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = 0;
+  auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
+  auto_wtopup_interval = 10000; // Reset topup interval to default
 }
 
 void auto_advancestate(void) 

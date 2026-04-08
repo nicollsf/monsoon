@@ -17,7 +17,8 @@ const int LSCPINS[2] = { 25, 34 };       // level sense inputs (Lcap low high). 
 const int LSCPINSlv[2] = { LOW, LOW };  // state for level low indicator
 const int TSAPIN = 4;                   // temperature (onewire digital)
 //const int TSA2PIN = 34;                 // temperature (NTC 10k analog)
-const int TSA2PIN = 26;                 // temperature (NTC 10k analog).  Want this on 34 but pin seems blown
+//const int TSA2PIN = 26;                 // temperature (NTC 10k analog).  Want this on 34 but pin seems blown
+const int TSA2PIN = 33;                 // temperature (NTC 10k analog).  Wanted this on 26 but pin seems blown (sinking current sometimes?)
 const int FSPINS[2] = { 36, 39 };       // flow sensor inputs (on interrupt pins)
 // const int RSTSENS = 6;
 //const int SC_UND = 14, SC_CLK = 27;     // speed control (digipot)
@@ -26,7 +27,7 @@ const int SC_PWM0 = 14, SC_PWM1 = 27;      // speed control (hbridge)
 // const int TRIAC_ZERO = 18, TRIAC_SCR = A10;  // heater control
 //const int PSPIN = 25;                 // pressure sensor (analog in 0-4096)
 const int PSPIN = 35;                   // pressure sensor (analog in 0-4096)
-const int RLEVTXPIN = 31;               // level range TX
+const int RLEVTXPIN = 15;               // level range TX
 const int RLEVRXPIN = 32;               // level range RX
 
 // Relay functionality
@@ -40,7 +41,8 @@ inline void setrelay_en(int rpin, bool rval) { RPINS_EN[rpin] = rval; }
 inline int getrelay_en(int rpin) { return RPINS_EN[rpin]; }
 inline void setrelay(int rpin, bool rval) { digitalWrite(RPINS[rpin], rval==ROFF ? RPINS_ROFF[rpin] : !RPINS_ROFF[rpin]); }
 inline int getrelay(int rpin) { return digitalRead(RPINS[rpin])==RPINS_ROFF[rpin] ? ROFF : RON; }
-inline void rpinsen_reset(void) { for( int i=0; i<7; i++ ) setrelay_en(i, ROFF); }
+extern int rpins_reset_cnt;
+inline void rpinsen_reset(void) { for( int i=0; i<7; i++ ) setrelay_en(i, ROFF); rpins_reset_cnt++; }
 
 void setup_pins(void);
 void loop_pins(void);

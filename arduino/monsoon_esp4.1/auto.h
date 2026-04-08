@@ -5,7 +5,7 @@ extern const int eepromaddr0;
 
 extern int auto_double;  // two pump mode
 enum auto_states {
-  STATE_NONE = 0, STATE_OFF, STATE_FILL, STATE_SETUP, STATE_SETUP1, STATE_WARM, STATE_WARM1, STATE_WASH, STATE_WASH1, STATE_FLUSHE, STATE_FLUSHR, STATE_PAUSE, STATE_SHUT, STATE_EMPTY, STATE_CALIBP, STATE_CALIBT, STATE_CALIBDUMP, STATE_WTF
+  STATE_NONE = 0, STATE_OFF, STATE_FILL, STATE_SETUP1, STATE_WARM, STATE_WARM1, STATE_WASH, STATE_WASH1, STATE_RINSE, STATE_FLUSHE, STATE_FLUSHR, STATE_PAUSE, STATE_SHUT, STATE_CALIBP, STATE_CALIBT, STATE_CALIBDUMP, STATE_WTF
 };
 
 extern float temp_setpoint;
@@ -20,6 +20,7 @@ extern unsigned long auto_statestime, auto_substatestime;
 
 // Circuits
 extern int auto_wtopupenable;//, auto_rtopupenable;
+extern unsigned long auto_wtopup_interval;
 extern int auto_woverflowstopenable;
 //extern int auto_wheaterenable, auto_rheaterenable;
 //void loop_autortopup(void);
@@ -28,9 +29,9 @@ extern int auto_woverflowstopenable;
 // Auto state loops
 void loop_autooff(void);
 void loop_autofill(void);
-void loop_autosetup(void);
 void loop_autowarm(void);
 void loop_autowash(void);
+void loop_autorinse(void);
 void loop_autopause(void);
 void loop_autoshut(void);
 

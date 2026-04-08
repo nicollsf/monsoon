@@ -63,6 +63,8 @@ enum TCMODE { TCNONE = 0, TCOFF, TCON, TCHEATER, TCSPEED };
 extern TCMODE temp_controlmode;
 extern float temp_setpoint;
 //float temp_reqsetpoint = temp_setpoint;
+extern double tc_pidinput, tc_pidoutput;
 
 void setup_tempcontrol(void);
 void loop_tempcontrol(void);
+void save_temp_setpoint(void);

@@ -120,6 +120,7 @@ void loop_autocalibp(void)
 enum autocalibt_states {
   CALIBT_NONE = 0,
   CALIBT_OVERSCAVENGE,
+  CALIBT_PREWARM,
   CALIBT_TEMPRESP,
   CALIBT_DONE
 };
@@ -133,11 +134,14 @@ struct TempLogPoint {
 } __attribute__((packed));
 std::vector<TempLogPoint> temp_response_log;
 
-const char *autocalibt_statestrs[] = {"NONE", "OVERSCAVENGE", "TEMPRESP", "DONE", "WTF"};
+const char *autocalibt_statestrs[] = {"NONE", "OVERSCAVENGE", "PREWARM", "TEMPRESP", "DONE", "WTF"};
 void loop_autocalibt(void)
 {
   static int last_substate = -1;
   float target_lpm_low, target_lpm_high, current_target_lpm;
+
+  const float CALIB_TARGET_TEMP = temp_setpoint; // The desired center-point for calibration based on user preference.
+  const float CALIB_DEVIATION = 3.0f;    // The +/- range to explore around the target.
 
   if( auto_state!=STATE_CALIBT ) return;
   auto_substatestrs = autocalibt_statestrs;
@@ -170,25 +174,73 @@ void loop_autocalibt(void)
         // Phase 1: Over-scavenge to ensure shower base is empty (minimal charge)
         setpump_perc(RPUMPR, 100);  
         setpump_lpm(RPUMPD, target_lpm_high);
+
+        // Enable occasional top-up to prevent running dry, with a longer interval
+        auto_wtopup_interval = 20000; // 20 seconds
+        auto_wtopupenable = 1;
       }
 
       // Wait for pan to clear and tank to fill
       if( level_high1 && (millis() - auto_substatestime > 15000) ) {
-        Serial.println("Switching substate to CALIBT_TEMPRESP");
+        Serial.println("Switching substate to CALIBT_PREWARM");
         calib_cind = -1;
-        auto_switchsubstate(CALIBT_TEMPRESP); 
+        auto_switchsubstate(CALIBT_PREWARM); 
       }
       break;
 
-    case CALIBT_TEMPRESP:
-      static int step_repeat = 0;
+    case CALIBT_PREWARM: {
+      const float PREWARM_TARGET = CALIB_TARGET_TEMP; 
+      const float TEMP_UPPER = CALIB_TARGET_TEMP + CALIB_DEVIATION; // Upper limit of investigation range
+      float base_lpm = 0.10f * modeld.maxflow; // Low flow to minimise circuit heat loss
+      float pulse_lpm = 0.70f * modeld.maxflow; // Periodic pulse to guarantee mixing
+      unsigned long cycle_time = (millis() - auto_substatestime) % 30000; // 30s cycle
+      const unsigned long PREWARM_MAX_DURATION = 600000; // 10 minutes
+
+      if( just_entered ) {
+        auto_wtopupenable = 0; // Disable top-up from previous state
+        auto_wtopup_interval = 10000; // Reset to default
+
+        setrelay_en(RPDELIVER, RON);  
+        setpump_en(RPUMPR, RON);  
+        setpump_en(RPUMPD, RON); 
+        setpump_perc(RPUMPR, 100);
+        btLog("Starting PREWARM to " + String(PREWARM_TARGET) + "C.");
+      }
+
+      // Pulse flow for 5 seconds every 30 seconds for good mixing
+      if( cycle_time < 5000 ) {
+        setpump_lpm(RPUMPD, pulse_lpm);
+      } else {
+        setpump_lpm(RPUMPD, base_lpm);
+      }
+
+      if( temp1 >= TEMP_UPPER ) {
+        btLog("Tank above investigation range (" + String(temp1) + "C). Switching to TEMPRESP.");
+        auto_switchsubstate(CALIBT_TEMPRESP);
+      } else if( temp1 >= PREWARM_TARGET ) {
+        btLog("Prewarm target reached (" + String(temp1) + "C). Switching to TEMPRESP.");
+        auto_switchsubstate(CALIBT_TEMPRESP);
+      } else if( millis() - auto_substatestime >= PREWARM_MAX_DURATION ) {
+        btLog("ERROR: Prewarm timeout (10 min). Could not reach " + String(PREWARM_TARGET) + "C. Aborting.");
+        auto_switchsubstate(CALIBT_DONE);
+      }
+      break;
+    }
+
+    case CALIBT_TEMPRESP: {
       static unsigned long last_sample_time = 0;
+      static unsigned long last_step_change_time = 0;
       static bool is_high_step = false;
+      const float TEMP_LOWER = CALIB_TARGET_TEMP - CALIB_DEVIATION;
+      const float TEMP_UPPER = CALIB_TARGET_TEMP + CALIB_DEVIATION;
+      const float TEMP_MAX = 58.0; // Graceful exit before safety limits trigger
+      const unsigned long CALIB_MAX_DURATION = 1200000; // 20 minutes
 
       target_lpm_low = 0.333f * modeld.maxflow;
       target_lpm_high = 0.666f * modeld.maxflow;
 
       if( just_entered ) {
+        auto_wtopupenable = 0; // Explicitly disable auto-topup to ensure manual inlet control.
         auto_woverflowstopenable = 1;
         setrelay_en(RPDELIVER, RON);  setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON);  
 
@@ -196,31 +248,27 @@ void loop_autocalibt(void)
         temp_response_log.reserve(1000); 
         calib_lastsettime = millis();
         last_sample_time = millis();
-        step_repeat = 0;
-        is_high_step = false;
+        last_step_change_time = millis();
+        is_high_step = (temp1 >= TEMP_UPPER); // Set initial state based on current temp
         Serial.printf("Starting Temp Response. Targets: %.2f/%.2f LPM\n", target_lpm_low, target_lpm_high);
         
         // Clear NVRAM log
         Preferences p;
         p.begin("calibt", false);
-        p.remove("log");
+        p.clear();
         p.end();
 
         // Overscavenge using recovery pump, rely on auto_woverflowstopenable for limits
         setpump_perc(RPUMPR, 100);
-        setpump_lpm(RPUMPD, target_lpm_low);
+        setpump_lpm(RPUMPD, is_high_step ? target_lpm_high : target_lpm_low);
       }
 
       current_target_lpm = is_high_step ? target_lpm_high : target_lpm_low;      
 
       if( !level_high0 ) {
         btLog("ERROR: Tank level low during Temp Calib. Aborting.");
-        // Save partial data before aborting!
-        Preferences prefs;
-        prefs.begin("calibt", false);
-        prefs.putBytes("log", temp_response_log.data(), temp_response_log.size() * sizeof(TempLogPoint));
-        prefs.end();
-        auto_switchstate(STATE_CALIBDUMP);
+        calib_archive_log();
+        auto_switchstate(STATE_CALIBDUMP); // Go directly to dump
         return;
       }
 
@@ -228,7 +276,7 @@ void loop_autocalibt(void)
         return;
       }
 
-      if( millis()-last_sample_time >= 1000 ) {
+      if( millis()-last_sample_time >= 5000 ) {
         last_sample_time = millis();
         TempLogPoint p;
         p.time_sec = (uint16_t)((millis() - auto_substatestime) / 1000);
@@ -237,36 +285,49 @@ void loop_autocalibt(void)
         p.flow1 = flow_lpm1;
         p.target_lpm_x10 = (uint8_t)(current_target_lpm * 10);
         temp_response_log.push_back(p);
+      }
 
-        // Save to NVRAM every 10 seconds
-        if (temp_response_log.size() % 10 == 0) {
-           Preferences prefs;
-           prefs.begin("calibt", false);
-           prefs.putBytes("log", temp_response_log.data(), temp_response_log.size() * sizeof(TempLogPoint));
-           prefs.end();
+      // Determine if the temperature has hit an asymptote (stabilised)
+      bool stable = false;
+      // Must be in the current step for at least 90 seconds to avoid falsely triggering on the turnaround peak
+      if (millis() - last_step_change_time >= 90000 && temp_response_log.size() >= 12) {
+        // Compare the current temperature with the temperature recorded 12 samples (60 seconds) ago at 5s intervals
+        float temp_60s_ago = temp_response_log[temp_response_log.size() - 12].temp_c;
+        if (abs(temp1 - temp_60s_ago) <= 0.2) {
+          stable = true;
         }
       }
 
-      if( millis()-calib_lastsettime >= 120000 ) {
-        calib_lastsettime = millis();
-        is_high_step = !is_high_step;
-        if (!is_high_step) step_repeat++; 
-        setpump_lpm(RPUMPD, is_high_step ? target_lpm_high : target_lpm_low);
-        btLog("Temp Step: Delivery Flow now " + String(is_high_step ? target_lpm_high : target_lpm_low) + " LPM");
+      // Switching logic based on temperature thresholds OR stabilisation
+      if (!is_high_step && (temp1 >= TEMP_UPPER || stable)) {
+        is_high_step = true;
+        setpump_lpm(RPUMPD, target_lpm_high);
+        last_step_change_time = millis();
+        
+        if (stable) btLog("Heating stabilised at " + String(temp1) + "C. Flow now HIGH (" + String(target_lpm_high) + " LPM)");
+        else btLog("Temp crossed upper boundary (" + String(TEMP_UPPER) + "C). Flow now HIGH (" + String(target_lpm_high) + " LPM)");
+      } else if (is_high_step && (temp1 <= TEMP_LOWER || stable)) {
+        is_high_step = false;
+        setpump_lpm(RPUMPD, target_lpm_low);
+        last_step_change_time = millis();
+        
+        if (stable) btLog("Cooling stabilised at " + String(temp1) + "C. Flow now LOW (" + String(target_lpm_low) + " LPM)");
+        else btLog("Temp crossed lower boundary (" + String(TEMP_LOWER) + "C). Flow now LOW (" + String(target_lpm_low) + " LPM)");
       }
 
-      if( step_repeat >= 4 ) {
-        // Final save
-        Preferences prefs;
-        prefs.begin("calibt", false);
-        prefs.putBytes("log", temp_response_log.data(), temp_response_log.size() * sizeof(TempLogPoint));
-        prefs.end();
-
-        btLog("Temp calibration recording completed and archived.");
-        temp_response_log.clear(); 
+      // Exit successfully if we hit the max time limit or the maximum safety temperature
+      bool timeout = (millis() - auto_substatestime >= CALIB_MAX_DURATION);
+      bool temp_exceeded = (temp1 >= TEMP_MAX);
+      
+      if( timeout || temp_exceeded ) {
+        if (timeout) btLog("Temp calibration 20-minute duration reached.");
+        if (temp_exceeded) btLog("Temp calibration max temp limit (" + String(TEMP_MAX) + "C) reached.");
+        calib_archive_log();
         auto_switchsubstate(CALIBT_DONE);
+        return;
       }
       break;
+    }
 
     case CALIBT_DONE:
       if( just_entered ) {
@@ -348,4 +409,21 @@ void loop_calib(void)
   loop_autocalibp();
   loop_autocalibt();
   loop_autocalibdump();
+}
+
+void calib_archive_log(void) {
+    if (temp_response_log.empty()) {
+        return; // Nothing to save
+    }
+
+    Preferences prefs;
+    prefs.begin("calibt", false);
+    if (prefs.putBytes("log", temp_response_log.data(), temp_response_log.size() * sizeof(TempLogPoint))) {
+        btLog("CALIBT log (" + String(temp_response_log.size()) + " pts) archived to NVRAM.");
+    } else {
+        btLog("ERROR: Failed to archive CALIBT log to NVRAM.");
+    }
+    prefs.end();
+
+    temp_response_log.clear(); // Free up memory
 }
