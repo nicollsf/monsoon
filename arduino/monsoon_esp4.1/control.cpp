@@ -22,7 +22,7 @@ void loop_heaters(void)
   htrs_changed = 0;
 
   bool temp_safe = (temp1 <= htrs_maxtemp);
-  bool level_safe = (digitalRead(LSPINS[0])!=LSPINSlv[0]);
+  bool level_safe = !tank_empty; // Level is safe if the tank is not empty
 
   // Force heaters off if disabled or unsafe
   if( !htrs_enable || htrs_forcedisable || !level_safe || !temp_safe ) {
@@ -182,7 +182,7 @@ void loop_speedcontrol(void)
 
   // Find new pump values
   for( int i=0; i<2; i++ ) {
-    if( RPUMP_EN[i]==ROFF || (i == RPUMPR && level_high1) ) sc_pwmw[i] = 0;  
+    if( RPUMP_EN[i]==ROFF || (i == RPUMPR && tank_full) ) sc_pwmw[i] = 0;
     else {
       int sc_pwmtarg = 255.0/100.0*sc_setperc[i];
       if( sc_pwmtarg<=sc_pwmw[i] ) sc_pwmw[i] = sc_pwmtarg;
@@ -197,7 +197,7 @@ void loop_speedcontrol(void)
   // Manage the main pump power relay
   static bool pumps_were_active = false;
   static int last_rpins_reset_cnt = 0;
-  bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !level_high1);
+  bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !tank_full);
   bool d_active = (RPUMP_EN[RPUMPD] == RON && sc_setperc[RPUMPD] > 0.0f);
   bool pumps_active = r_active || d_active;
                       
