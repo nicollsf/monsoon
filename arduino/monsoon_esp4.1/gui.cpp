@@ -282,9 +282,9 @@ void report_lsvals(void)
   String mstr = "*Q";
 
   // Mechanical sensors
-  if( !level_high0 ) mstr += "0";
+  if( tank_empty ) mstr += "0";
   else mstr += "1";
-  if( !level_high1 ) mstr += "0";
+  if( !tank_full ) mstr += "0"; // !tank_full means the upper sensor is low
   else mstr += "1";
 
   // Capacitive sensors

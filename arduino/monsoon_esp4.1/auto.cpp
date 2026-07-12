@@ -137,7 +137,6 @@ void loop_autowtopup(void)
 // Auto burp working tank
 int auto_wburpenable = 0;
 unsigned long auto_wburpopenstime = 0;
-//unsigned long auto_wburplasthightime = 0, auto_wburplastlowtime = 0;
 
 void loop_autowburp(void)
 {
