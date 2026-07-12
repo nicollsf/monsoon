@@ -19,7 +19,9 @@ inline int getpump_en(int rpump) { return RPUMP_EN[rpump]; }
 inline void setpump_perc(int rpump, float perc) 
 { 
   if( perc<0 ) perc = 0;
-  if( perc>100 ) perc = 100;
+  
+  float max_perc = (rpump == RPUMPD) ? 90.0f : 100.0f;
+  if( perc>max_perc ) perc = max_perc;
 
   //Serial.println("Setting pump " + String(rpump) + " to " + String(perc) + "%");
   sc_setperc[rpump] = perc; 

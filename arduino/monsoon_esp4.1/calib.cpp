@@ -20,15 +20,18 @@ unsigned int calib_laststagetime;
 // Auto calibrate pumps
 enum autocalibp_states {
   CALIBP_NONE = 0,
-  CALIBP_STABILISE,
-  CALIBP_PUMPSPEED,
+  CALIBP_FILL,            // Fill tank to full
+  CALIBP_PREPARE,         // Prime and stabilise circuit
+  CALIBP_CALIB_DELIVERY,  // Calibrate delivery pump
+  CALIBP_SCAVENGE_PREP,   // Flood pan (scavenge off, delivery 90% until tank level low)
+  CALIBP_CALIB_SCAVENGE,  // Calibrate scavenge pump (with dynamic delivery)
   CALIBP_DONE
 };
 
 std::vector<float> calib_pumpperc = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100};
 std::vector<float> calib_dpumpmap, calib_rpumpmap;
 
-const char *autocalibp_statestrs[] = {"NONE", "STABILISE", "PUMPSPEED", "DONE", "WTF"};
+const char *autocalibp_statestrs[] = {"NONE", "FILL", "PREPARE", "CALIB_DEL", "SCAV_PREP", "CALIB_SCAV", "DONE", "WTF"};
 std::vector<float> pdpercv, trespv;
 void loop_autocalibp(void)
 {
@@ -49,67 +52,157 @@ void loop_autocalibp(void)
         temp_controlmode = TCOFF;
         btLog("Entering CALIBP_NONE");
         calib_cind = -1;
-      }
-      Serial.println("Switching substate to CALIB_STABILISE");
-      auto_switchsubstate(CALIBP_STABILISE);
-      break;
-
-    case CALIBP_STABILISE:
-      if( just_entered ) {
-        setrelay_en(RPDELIVER, RON);  setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON); 
-        setpump_perc(RPUMPR, 100);  setpump_perc(RPUMPD, 100);
-      }
-      if( millis()-auto_substatestime<15000 ) {
-        break;
-      }
-
-      Serial.println("Switching substate to CALIBP_PUMPSPEED");
-      calib_cind = -1;
-      auto_switchsubstate(CALIBP_PUMPSPEED); 
-      break;
-      
-    case CALIBP_PUMPSPEED:
-      if( just_entered ) {
-        setrelay_en(RPDELIVER, RON);  setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON);  
-      }
-
-      if( calib_cind<0 ) {
+        calib_dpumpmap.clear();
         calib_rpumpmap.clear();
+      }
+      Serial.println("Switching substate to CALIBP_FILL");
+      auto_switchsubstate(CALIBP_FILL);
+      break;
+
+    case CALIBP_FILL:
+      if( just_entered ) {
+        btLog("CALIBP: Filling tank from mains inlet.");
+        setrelay_en(RPINLET, RON);
+      }
+
+      if( level_high1 ) {
+        btLog("CALIBP: Tank is full. Moving to prepare/prime stage.");
+        setrelay_en(RPINLET, ROFF);
+        auto_switchsubstate(CALIBP_PREPARE);
+      }
+      break;
+
+    case CALIBP_PREPARE:
+      if( just_entered ) {
+        btLog("CALIBP: Priming/stabilising circuit. SCAVENGE 100%, DELIVERY 50%, top-up ON.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_perc(RPUMPR, 100);
+        setpump_perc(RPUMPD, 50); // delivery ~50%
+        auto_wtopupenable = 1;
+      }
+
+      // Wait for tank to be full and flow to be stable for 20s
+      if( level_high1 && (millis() - flow_lastlt1 > 20000) ) {
+        btLog("CALIBP: Flow stable. Starting delivery pump calibration.");
+        calib_cind = -1;
+        auto_switchsubstate(CALIBP_CALIB_DELIVERY);
+      }
+      break;
+
+    case CALIBP_CALIB_DELIVERY:
+      if( just_entered ) {
+        btLog("CALIBP: Starting delivery pump calibration step series.");
         calib_dpumpmap.clear();
         calib_cind = 0;
-        Serial.println("Setting pumps to " + String(calib_pumpperc[calib_cind]));
-        setpump_perc(RPUMPR, calib_pumpperc[calib_cind]);
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_perc(RPUMPR, 100); // Scavenge full to clear pan
+        setpump_en(RPUMPD, RON);
         setpump_perc(RPUMPD, calib_pumpperc[calib_cind]);
+        auto_wtopupenable = 1; // Keep tank full during delivery calibration
         calib_lastsettime = millis();
-        break;
       }
 
-      if( millis()-calib_lastsettime<10000 ) break;
-
-      calib_rpumpmap.push_back(flow_lpm0);
-      calib_dpumpmap.push_back(flow_lpm1);
-
-      if( calib_cind < (int)calib_pumpperc.size()-1 ) {
-        calib_cind++;
-        Serial.println("Setting pumps to " + String(calib_pumpperc[calib_cind]));
-        setpump_perc(RPUMPR, calib_pumpperc[calib_cind]);
-        setpump_perc(RPUMPD, calib_pumpperc[calib_cind]);
-        calib_lastsettime = millis();
-        break;
+      // Safeguard check
+      if( !level_high0 ) {
+        btLog("ERROR: Tank level low during Delivery Calib. Aborting.");
+        pumpsen_reset();
+        auto_switchstate(STATE_OFF);
+        return;
       }
-        
-      modelr = pumpcalib_fit(calib_pumpperc, calib_rpumpmap);
-      modeld = pumpcalib_fit(calib_pumpperc, calib_dpumpmap);
-      pumpcalib_savemodels(); 
 
-      auto_switchsubstate(CALIBP_DONE); 
+      if( millis() - calib_lastsettime >= 10000 ) {
+        float measured_flow = flow_lpm0;
+        calib_dpumpmap.push_back(measured_flow);
+        btLog("CALIBP: Delivery " + String(calib_pumpperc[calib_cind], 0) + "% -> Flow: " + String(measured_flow, 2) + " LPM");
+
+        if( calib_cind < (int)calib_pumpperc.size() - 1 ) {
+          calib_cind++;
+          setpump_perc(RPUMPD, calib_pumpperc[calib_cind]);
+          calib_lastsettime = millis();
+        } else {
+          // Delivery calibration complete
+          std::vector<float> dpump_pwms;
+          std::vector<float> dpump_flows;
+          for (size_t i = 0; i < calib_pumpperc.size(); i++) {
+            if (calib_pumpperc[i] <= 90.0f) {
+              dpump_pwms.push_back(calib_pumpperc[i]);
+              dpump_flows.push_back(calib_dpumpmap[i]);
+            }
+          }
+          modeld = pumpcalib_fit(dpump_pwms, dpump_flows);
+          pumpcalib_savemodels();
+          btLog("CALIBP: Delivery pump calibration finished. Model fitted and saved.");
+          auto_switchsubstate(CALIBP_SCAVENGE_PREP);
+        }
+      }
+      break;
+
+    case CALIBP_SCAVENGE_PREP:
+      if( just_entered ) {
+        btLog("CALIBP: Flooding pan. Scavenge off, top-up off, Delivery 90% until level low.");
+        setpump_en(RPUMPR, ROFF);
+        auto_wtopupenable = 0;
+        setrelay_en(RPINLET, ROFF);
+        setrelay_en(RPDELIVER, RON);
+        setpump_perc(RPUMPD, 90);
+        setpump_en(RPUMPD, RON);
+      }
+
+      // Wait until bottom level sensor hits low (which means pan is flooded/full)
+      if( !level_high0 ) {
+        btLog("CALIBP: Tank level hit low (pan is full). Starting scavenge calibration steps.");
+        calib_cind = -1;
+        auto_switchsubstate(CALIBP_CALIB_SCAVENGE);
+      }
+      break;
+
+    case CALIBP_CALIB_SCAVENGE:
+      if( just_entered ) {
+        btLog("CALIBP: Starting scavenge pump calibration step series with dynamic delivery.");
+        calib_rpumpmap.clear();
+        calib_cind = 0;
+        setrelay_en(RPDELIVER, RON);
+        setpump_perc(RPUMPR, calib_pumpperc[calib_cind]);
+        setpump_en(RPUMPR, RON);
+        calib_lastsettime = millis();
+      }
+
+      // Dynamic Delivery pump control:
+      // drive the DELIVERY pump full (90%) when the tank level is high and have it off when the level is low.
+      if( level_high1 ) {
+        setpump_perc(RPUMPD, 90);
+        setpump_en(RPUMPD, RON);
+      } else {
+        setpump_en(RPUMPD, ROFF);
+      }
+
+      if( millis() - calib_lastsettime >= 10000 ) {
+        float measured_flow = flow_lpm1;
+        calib_rpumpmap.push_back(measured_flow);
+        btLog("CALIBP: Scavenge " + String(calib_pumpperc[calib_cind], 0) + "% -> Flow: " + String(measured_flow, 2) + " LPM");
+
+        if( calib_cind < (int)calib_pumpperc.size() - 1 ) {
+          calib_cind++;
+          setpump_perc(RPUMPR, calib_pumpperc[calib_cind]);
+          calib_lastsettime = millis();
+        } else {
+          // Scavenge calibration finished
+          modelr = pumpcalib_fit(calib_pumpperc, calib_rpumpmap);
+          pumpcalib_savemodels();
+          btLog("CALIBP: Scavenge pump calibration finished. Model fitted and saved.");
+          auto_switchsubstate(CALIBP_DONE);
+        }
+      }
       break;
 
     case CALIBP_DONE:
       if( just_entered ) {
         auto_woverflowstopenable = 0;
+        pumpsen_reset();
       }
-      //htrs_disable = 0;
       auto_switchstate(STATE_CALIBT);
       break;
   }
@@ -267,6 +360,7 @@ void loop_autocalibt(void)
 
       if( !level_high0 ) {
         btLog("ERROR: Tank level low during Temp Calib. Aborting.");
+        pumpsen_reset();
         calib_archive_log();
         auto_switchstate(STATE_CALIBDUMP); // Go directly to dump
         return;
@@ -334,6 +428,7 @@ void loop_autocalibt(void)
         auto_woverflowstopenable = 0;
         //htrs_disable = 0;
         temp_controlmode = TCNONE;
+        pumpsen_reset();
       }
       auto_switchstate(STATE_CALIBDUMP); // Automatically dump CSV on success
       break;

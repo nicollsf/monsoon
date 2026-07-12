@@ -133,7 +133,7 @@ void serialcmd(char cmd)
       case STATE_WARM1:  auto_nextstate = STATE_WASH1; break;
       case STATE_WASH1:  auto_nextstate = STATE_PAUSE; break;
     }
-    btLog("Incrementing auto_nextstate to " + String(auto_statestrs[auto_nextstate]));
+    Serial.println("Incrementing auto_nextstate to " + String(auto_statestrs[auto_nextstate]));
     report_state();
   }
 

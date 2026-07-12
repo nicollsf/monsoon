@@ -7,8 +7,10 @@
 //   Level sensing
 // ----------------------------------------------------------------------
 
-bool level_high0, level_high1; 
-bool level_chigh0, level_chigh1; 
+bool level_high0, level_high1;
+bool level_chigh0, level_chigh1;
+bool tank_full = false;
+bool tank_empty = false;
 int level_lastlt0, level_lastlt1;  // last low time
 int level_lastht0, level_lastht1;  // last high time
 
@@ -30,7 +32,13 @@ void setup_levelsens(void) {
   level_high0last = level_high1last = false;
 }
 
-void loop_levelsens(void) 
+void update_tank_level_states(void)
+{
+  tank_full = level_high1; // Tank is full if the upper sensor is high
+  tank_empty = !level_high0 && !level_high1; // Tank is empty if both sensors are low
+}
+
+void loop_levelsens(void)
 {
   // Mechanical sensors
   if( digitalRead(LSPINS[0])==LSPINSlv[0] ) {
@@ -67,6 +75,8 @@ void loop_levelsens(void)
   if( level_high1!=level_high1last ) level_hest = level_height1;
   level_high0last = level_high0;
   level_high1last = level_high1;
+
+  update_tank_level_states();
 }
 
 
@@ -126,7 +136,13 @@ void loop_tempsens0(void)
   // Handle ready temperature measurement
   ttemp = sensors.getTempCByIndex(0);  // first device on bus
   if( ttemp>0 && ttemp<70 ) temp0 = ttemp;
-  else btLog("Ignoring invalid temp0=" + String(ttemp));
+  else {
+    static float last_logged_invalid_temp = 999.0;
+    if (ttemp != last_logged_invalid_temp) {
+      Serial.println("Ignoring invalid temp0=" + String(ttemp));
+      last_logged_invalid_temp = ttemp;
+    }
+  }
  
   temp_idle = 1;  //  ready for next
 }
@@ -257,12 +273,22 @@ void loop_tempsens(void)
 volatile int flow_cnt0, flow_cnt1;
 float flow_lpm0, flow_lpm1;
 unsigned long flow_lastupdate = 0;
+volatile unsigned long last_flow_time0 = 0;
+volatile unsigned long last_flow_time1 = 0;
 //const int flow_measureperiod = 1000;  // millis
 void IRAM_ATTR flowISR0(void) {
-  flow_cnt0 = flow_cnt0 + 1;
+  unsigned long now = micros();
+  if (now - last_flow_time0 >= 1000) {
+    flow_cnt0 = flow_cnt0 + 1;
+    last_flow_time0 = now;
+  }
 }
 void IRAM_ATTR flowISR1(void) {
-  flow_cnt1 = flow_cnt1 + 1;
+  unsigned long now = micros();
+  if (now - last_flow_time1 >= 1000) {
+    flow_cnt1 = flow_cnt1 + 1;
+    last_flow_time1 = now;
+  }
 }
 
 float flow_thr0, flow_thr1;

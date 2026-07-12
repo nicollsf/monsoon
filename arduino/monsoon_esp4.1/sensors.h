@@ -6,6 +6,8 @@
 // ----------------------------------------------------------------------
 
 extern bool level_high0, level_high1;  // last reading bottom and top sensor
+extern bool tank_full, tank_empty;
+void update_tank_level_states(void);
 extern bool level_chigh0, level_chigh1;  // last reading capacitive sensors
 extern float level_hest;
 extern float level_htank;

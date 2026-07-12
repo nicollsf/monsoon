@@ -1,6 +1,7 @@
 // Fred Nicolls, March 2023
 
 #include <Arduino.h>
+#include <esp_system.h>
 
 //HardwareSerial btSerial(2);  // pins GPIO16 (U2-Rx), GPIO17 (U2-Tx)
 HardwareSerial &btSerial = Serial2;
@@ -47,6 +48,16 @@ void setup()
       Serial.println("btSerial Rxd is on pin: " + String(RXD2));
       break;
   }
+
+  esp_reset_reason_t reason = esp_reset_reason();
+  if (reason == ESP_RST_TASK_WDT) {
+    btLog("CRITICAL WARNING: System restarted due to Task Watchdog Timer (TWDT) reset!");
+  } else if (reason == ESP_RST_INT_WDT) {
+    btLog("CRITICAL WARNING: System restarted due to Interrupt Watchdog Timer (IWDT) reset!");
+  } else if (reason == ESP_RST_WDT) {
+    btLog("CRITICAL WARNING: System restarted due to Watchdog Timer (WDT) reset!");
+  }
+
   btLog("Main setup() called");
 
   //setup_wifi();
@@ -68,11 +79,11 @@ void setup()
   
   interrupts();
 
-  //wdt_enable(WDTO_2S);     // enable watchdog
+  enableLoopWDT();     // enable watchdog
 }
 
 void loop() {
-  //wdt_reset();  // still alive
+  feedLoopWDT();  // still alive
   report_connblink();
   rpins_changed = 0;
 

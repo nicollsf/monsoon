@@ -182,7 +182,7 @@ void loop_speedcontrol(void)
 
   // Find new pump values
   for( int i=0; i<2; i++ ) {
-    if( RPUMP_EN[i]==ROFF ) sc_pwmw[i] = 0;  
+    if( RPUMP_EN[i]==ROFF || (i == RPUMPR && level_high1) ) sc_pwmw[i] = 0;  
     else {
       int sc_pwmtarg = 255.0/100.0*sc_setperc[i];
       if( sc_pwmtarg<=sc_pwmw[i] ) sc_pwmw[i] = sc_pwmtarg;
@@ -197,8 +197,9 @@ void loop_speedcontrol(void)
   // Manage the main pump power relay
   static bool pumps_were_active = false;
   static int last_rpins_reset_cnt = 0;
-  bool pumps_active = (RPUMP_EN[0] == RON && sc_setperc[0] > 0.0f) || 
-                      (RPUMP_EN[1] == RON && sc_setperc[1] > 0.0f);
+  bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !level_high1);
+  bool d_active = (RPUMP_EN[RPUMPD] == RON && sc_setperc[RPUMPD] > 0.0f);
+  bool pumps_active = r_active || d_active;
                       
   bool system_was_reset = (rpins_reset_cnt != last_rpins_reset_cnt);
   last_rpins_reset_cnt = rpins_reset_cnt;
