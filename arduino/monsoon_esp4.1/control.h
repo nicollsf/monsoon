@@ -55,7 +55,10 @@ void loop_speedcontrol(void);
 
 extern int htrs_enable;
 extern int htrs_changed;
+extern bool pump_safety_veto;
+extern bool inlet_safety_veto;
 void loop_heaters(void);
+void loop_pumps_and_valves(void);
 
 
 // ----------------------------------------------------------------------

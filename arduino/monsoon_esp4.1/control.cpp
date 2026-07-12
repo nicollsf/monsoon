@@ -16,6 +16,8 @@ int htrs_enable = 1;  // default enabled
 int htrs_forcedisable = 0;
 int htrs_changed;  // check after call to function
 float htrs_maxtemp = 62.5;
+bool pump_safety_veto = false; // Veto for recovery pump due to tank full
+bool inlet_safety_veto = false; // Veto for inlet valve due to tank full
 
 void loop_heaters(void)
 {
@@ -46,6 +48,21 @@ void loop_heaters(void)
   }
 
   return;
+}
+
+// ----------------------------------------------------------------------
+//   Pumps and Valves Safety Gatekeeper
+// ----------------------------------------------------------------------
+void loop_pumps_and_valves(void)
+{
+  // If the tank is full, set safety vetoes for recovery pump and inlet valve.
+  if (tank_full) {
+    pump_safety_veto = true;
+    inlet_safety_veto = true;
+  } else {
+    pump_safety_veto = false;
+    inlet_safety_veto = false;
+  }
 }
 
 
@@ -182,7 +199,7 @@ void loop_speedcontrol(void)
 
   // Find new pump values
   for( int i=0; i<2; i++ ) {
-    if( RPUMP_EN[i]==ROFF || (i == RPUMPR && tank_full) ) sc_pwmw[i] = 0;
+    if( RPUMP_EN[i]==ROFF || (i == RPUMPR && pump_safety_veto) ) sc_pwmw[i] = 0;
     else {
       int sc_pwmtarg = 255.0/100.0*sc_setperc[i];
       if( sc_pwmtarg<=sc_pwmw[i] ) sc_pwmw[i] = sc_pwmtarg;
@@ -197,7 +214,7 @@ void loop_speedcontrol(void)
   // Manage the main pump power relay
   static bool pumps_were_active = false;
   static int last_rpins_reset_cnt = 0;
-  bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !tank_full);
+  bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !pump_safety_veto);
   bool d_active = (RPUMP_EN[RPUMPD] == RON && sc_setperc[RPUMPD] > 0.0f);
   bool pumps_active = r_active || d_active;
                       

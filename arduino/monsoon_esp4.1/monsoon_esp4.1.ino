@@ -109,6 +109,7 @@ void loop() {
   // Actuation
   loop_tempcontrol();
   loop_heaters();
+  loop_pumps_and_valves(); // Centralized safety gatekeeper for pumps and valves
   loop_speedcontrol();
   loop_pins();
   if( rpins_changed ) rpins_lastreport = 0;  // force report

@@ -1,4 +1,5 @@
 #include "system.h"
+#include "control.h"
 
 //byte nwresets;  // number of warm restarts
 //int RPINS0_EN[8], RPINS1_EN[8];  // target values
@@ -71,10 +72,20 @@ void loop_pins()
   for( int i=0; i<7; i++ ) {
     
     // Update non-heater relays as required. Heaters are handled exclusively by loop_heaters().
-    if( i != RPHEATER && i != RPHEATERA && getrelay_en(i) != getrelay(i) ) {
-      //Serial.println("In loop_pins: calling setrelay(" + String(i) + ", " + String(getrelay_en(i)) + ")");
-      setrelay(i, getrelay_en(i));
-      rpins_changed = 1;
+    if( i != RPHEATER && i != RPHEATERA) {
+      int target_state = getrelay_en(i);
+      
+      // Apply safety vetoes
+      if (i == RPINLET && inlet_safety_veto) {
+        target_state = ROFF;
+      }
+      // Note: Recovery pump veto is handled in loop_speedcontrol since it's a pump, not a relay pin here.
+      
+      if (target_state != getrelay(i)) {
+        //Serial.println("In loop_pins: calling setrelay(" + String(i) + ", " + String(target_state) + ")");
+        setrelay(i, target_state);
+        rpins_changed = 1;
+      }
     }
 
   }
