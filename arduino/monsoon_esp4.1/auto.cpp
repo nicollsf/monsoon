@@ -224,14 +224,13 @@ void loop_autoscavengecontrol(void)
   if( !auto_scavengecontrolenable ) return;
   if( millis()-auto_scavengecontrolstime<500 ) return; // limit update rate
 
-  if( tank_full ) {
-    // Stop recovery if tank is full
-    if( getpump_en(RPUMPR) == RON ) setpump_en(RPUMPR, ROFF);
-  } else {
-    // Set recovery to delivery + 1 LPM
-    if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
-    setpump_lpm(RPUMPR, flow_lpm0 + 1.0f); 
-  }
+  // We want the scavenge (recovery) pump to run slightly faster than the delivery pump
+  // The safety mechanism in loop_pumps_and_valves (via pump_safety_veto) will
+  // safely stop the pump at the hardware level if the tank is full,
+  // so we don't need to override the software intent here.
+  
+  if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
+  setpump_lpm(RPUMPR, flow_lpm0 + 1.0f);
   
   auto_scavengecontrolstime = millis();
 }
@@ -491,16 +490,14 @@ void loop_autowash(void)
         btLog("Entering WASH_NONE: Starting shower.");
         // Use PID on flow and bang-bang on heaters to hold temperature.
         temp_controlmode = TCSPEED;
-        auto_wtopupenable = 1; // Keep tank full
-        auto_wtopup_interval = 20000; // 20s topup interval during WASH
-        wash_temp_stabilised = false;
-        wash_temp_stable_start_time = 0;
-        // Do not enable scavenge control yet; allow overscavenge first
+        auto_wtopupenable = 0; // Never enable auto topup during wash
+        // Skip overscavenge to prevent sucking air
       }
-      auto_switchsubstate(WASH_OVERSCAVENGE);
+      auto_switchsubstate(WASH_CYCLE);
       break;
 
     case WASH_OVERSCAVENGE:
+      // Skipped, but kept in code per request
       if( just_entered ) {
         btLog("WASH: Overscavenging pan.");
         setrelay_en(RPDELIVER, RON);
@@ -511,7 +508,7 @@ void loop_autowash(void)
       if (millis() - auto_substatestime > 5000) {
         auto_switchsubstate(WASH_CYCLE);
       }
-      break; 
+      break;
 
     case WASH_CYCLE:
       if( just_entered ) {
@@ -523,30 +520,6 @@ void loop_autowash(void)
       // In this state, loop_tempcontrol() is handling both the heaters (bang-bang)
       // and the delivery pump speed (PID) because temp_controlmode is TCSPEED.
       // The recovery pump is managed by loop_autoscavengecontrol().
-
-      // Manage auto-topup based on temperature stabilization and lower level sensor
-      if( !wash_temp_stabilised ) {
-        // Check if temperature has stabilised within +/- 1.0 degree C of setpoint
-        if( temp1 >= temp_setpoint - 1.0 && temp1 <= temp_setpoint + 1.0 ) {
-          if( wash_temp_stable_start_time == 0 ) {
-            wash_temp_stable_start_time = millis();
-          } else if( millis() - wash_temp_stable_start_time >= 30000 ) {
-            wash_temp_stabilised = true;
-            auto_wtopupenable = 0; // Disable auto topup
-            btLog("WASH: Temperature stabilised, disabling auto-topup.");
-          }
-        } else {
-          wash_temp_stable_start_time = 0;
-        }
-      } else {
-        // If temperature is stabilised, auto-topup remains disabled unless level drops below safe bottom sensor
-        if( tank_empty ) {
-          wash_temp_stabilised = false; // Reset stabilisation to allow topup and re-stabilise
-          wash_temp_stable_start_time = 0;
-          auto_wtopupenable = 1; // Re-enable auto-topup
-          btLog("WASH: Water level below safe limit, re-enabling auto-topup.");
-        }
-      }
 
       // PID Debug Logging
       static unsigned long last_debug_log = 0;
