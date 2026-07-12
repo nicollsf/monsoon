@@ -65,7 +65,7 @@ void loop_autocalibp(void)
         setrelay_en(RPINLET, RON);
       }
 
-      if( level_high1 ) {
+      if( tank_full ) {
         btLog("CALIBP: Tank is full. Moving to prepare/prime stage.");
         setrelay_en(RPINLET, ROFF);
         auto_switchsubstate(CALIBP_PREPARE);
@@ -84,7 +84,7 @@ void loop_autocalibp(void)
       }
 
       // Wait for tank to be full and flow to be stable for 20s
-      if( level_high1 && (millis() - flow_lastlt1 > 20000) ) {
+      if( tank_full && (millis() - flow_lastlt1 > 20000) ) {
         btLog("CALIBP: Flow stable. Starting delivery pump calibration.");
         calib_cind = -1;
         auto_switchsubstate(CALIBP_CALIB_DELIVERY);
@@ -106,7 +106,7 @@ void loop_autocalibp(void)
       }
 
       // Safeguard check
-      if( !level_high0 ) {
+      if( tank_empty ) {
         btLog("ERROR: Tank level low during Delivery Calib. Aborting.");
         pumpsen_reset();
         auto_switchstate(STATE_OFF);
@@ -152,7 +152,7 @@ void loop_autocalibp(void)
       }
 
       // Wait until bottom level sensor hits low (which means pan is flooded/full)
-      if( !level_high0 ) {
+      if( tank_empty ) {
         btLog("CALIBP: Tank level hit low (pan is full). Starting scavenge calibration steps.");
         calib_cind = -1;
         auto_switchsubstate(CALIBP_CALIB_SCAVENGE);
@@ -172,7 +172,7 @@ void loop_autocalibp(void)
 
       // Dynamic Delivery pump control:
       // drive the DELIVERY pump full (90%) when the tank level is high and have it off when the level is low.
-      if( level_high1 ) {
+      if( tank_full ) {
         setpump_perc(RPUMPD, 90);
         setpump_en(RPUMPD, RON);
       } else {
@@ -274,7 +274,7 @@ void loop_autocalibt(void)
       }
 
       // Wait for pan to clear and tank to fill
-      if( level_high1 && (millis() - auto_substatestime > 15000) ) {
+      if( tank_full && (millis() - auto_substatestime > 15000) ) {
         Serial.println("Switching substate to CALIBT_PREWARM");
         calib_cind = -1;
         auto_switchsubstate(CALIBT_PREWARM); 
@@ -358,7 +358,7 @@ void loop_autocalibt(void)
 
       current_target_lpm = is_high_step ? target_lpm_high : target_lpm_low;      
 
-      if( !level_high0 ) {
+      if( tank_empty ) {
         btLog("ERROR: Tank level low during Temp Calib. Aborting.");
         pumpsen_reset();
         calib_archive_log();
