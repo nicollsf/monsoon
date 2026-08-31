@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monsoon Shower Dashboard</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- MQTT.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
+  <style>
+    /* Dark mode scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 font-sans min-h-screen pb-10">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex flex-wrap justify-between items-center shadow-md">
+    <div class="flex items-center space-x-3">
+      <div class="w-4 h-4 rounded-full bg-red-500 animate-pulse" id="conn-indicator"></div>
+      <h1 class="text-xl font-bold tracking-wide flex items-center flex-wrap gap-y-2">
+        <span>MONSOON SHOWER CONTROL</span>
+        <span id="ota-version-display" class="text-xs text-gray-500 font-semibold ml-2.5 px-1.5 py-0.5 bg-gray-800 border border-gray-800 rounded">v--</span>
+        <span id="ota-update-badge" style="display: none;" class="text-[10px] font-bold text-gray-950 bg-green-400 px-2 py-0.5 rounded-full ml-2 uppercase animate-pulse">v-- available</span>
+        <button id="ota-update-btn" style="display: none;" onclick="sendCommand('O')" class="bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded ml-2 border border-green-700 transition-all duration-200 uppercase tracking-wider shadow">Update Now</button>
+      </h1>
+    </div>
+    <div class="flex items-center space-x-5 mt-2 sm:mt-0 text-sm">
+      <span class="flex items-center space-x-2">
+        <span class="text-gray-400">WiFi:</span>
+        <span id="wifi-dot" class="w-3.5 h-3.5 rounded-full bg-red-500 shadow-md shadow-red-500/30 transition-all duration-300"></span>
+      </span>
+      <span class="flex items-center space-x-2">
+        <span class="text-gray-400">MQTT:</span>
+        <span id="mqtt-dot" class="w-3.5 h-3.5 rounded-full bg-red-500 shadow-md shadow-red-500/30 transition-all duration-300"></span>
+      </span>
+      <span class="text-gray-400">State:</span>
+      <span id="state-display" class="px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-cyan-400">DISCONNECTED</span>
+    </div>
+  </header>
+
+  <!-- Connection Configuration Panel -->
+  <div class="max-w-7xl mx-auto px-4 mt-6">
+    <details class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm" open>
+      <summary class="font-semibold text-gray-300 cursor-pointer select-none">MQTT Broker Connection Settings</summary>
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4 text-sm">
+        <div>
+          <label class="block text-gray-400 mb-1">Host (WebSocket URL)</label>
+          <input type="text" id="mqtt-host" value="ws://10.0.0.7:9001" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
+        </div>
+        <div>
+          <label class="block text-gray-400 mb-1">Client ID</label>
+          <input type="text" id="mqtt-clientid" value="monsoon_web_ui" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
+        </div>
+        <div>
+          <label class="block text-gray-400 mb-1">Username (Optional)</label>
+          <input type="text" id="mqtt-user" value="" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
+        </div>
+        <div>
+          <label class="block text-gray-400 mb-1">Password (Optional)</label>
+          <input type="password" id="mqtt-pass" value="" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
+        </div>
+        <div class="flex items-end">
+          <button id="btn-connect" onclick="toggleConnection()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 px-4 rounded transition-all duration-200">Connect</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Dashboard Main Grid -->
+  <main class="max-w-7xl mx-auto px-4 mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- Column 1: Controls -->
+    <div class="space-y-6 lg:col-span-1">
+      
+      <!-- Temperature Target Controller -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2 mb-4">TEMPERATURE SETPOINT</h2>
+        <div class="flex items-center justify-between">
+          <button onclick="sendCommand('u')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700">-</button>
+          <div class="text-center">
+            <span id="setpoint-val" class="text-4xl font-extrabold text-cyan-400">--.-</span>
+            <span class="text-gray-400 text-xl font-medium">&deg;C</span>
+          </div>
+          <button onclick="sendCommand('U')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700">+</button>
+        </div>
+      </div>
+
+      <!-- State progression -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">AUTO SEQUENCING</h2>
+        <div class="grid grid-cols-2 gap-4">
+          <button onclick="sendCommand('S')" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 py-3 rounded-lg font-semibold text-gray-200">Next State</button>
+          <button onclick="sendCommand('Y')" class="bg-cyan-700 hover:bg-cyan-600 border border-cyan-600 py-3 rounded-lg font-semibold text-white">Go / Confirm</button>
+        </div>
+        <div class="pt-2 text-center text-sm border-t border-gray-800 mt-2">
+          <span class="text-xs text-gray-500 uppercase tracking-wider block mb-1">Next Proposed State</span>
+          <span id="next-state-display" class="inline-block px-4 py-1.5 bg-yellow-950/30 border border-yellow-700/30 rounded text-yellow-400 font-bold uppercase tracking-wider min-w-[120px]">--</span>
+        </div>
+      </div>
+
+      <!-- Manual Relays & Pumps -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">MANUAL OVERRIDES</h2>
+        
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <!-- Inlet -->
+          <button onclick="sendCommand('f')" id="btn-relay-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Inlet Valve</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-0"></span>
+          </button>
+          <!-- Drain -->
+          <button onclick="sendCommand('g')" id="btn-relay-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Drain Valve</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-1"></span>
+          </button>
+          <!-- Delivery Valve -->
+          <button onclick="sendCommand('h')" id="btn-relay-2" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Deliver Valve</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-2"></span>
+          </button>
+          <!-- Aux Heater -->
+          <button onclick="sendCommand('i')" id="btn-relay-3" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Aux Heater (A)</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-3"></span>
+          </button>
+          <!-- Main Pump -->
+          <button onclick="sendCommand('j')" id="btn-pump-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Scavenge Pump</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-0"></span>
+          </button>
+          <!-- Delivery Pump -->
+          <button onclick="sendCommand('k')" id="btn-pump-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Delivery Pump</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-1"></span>
+          </button>
+          <!-- Burp Valve -->
+          <div class="bg-gray-800/40 border border-gray-800 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center text-gray-400">
+            <span>Burp Valve (Bleed)</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-burp-valve"></span>
+          </div>
+          <!-- Pumps Power Relay -->
+          <div class="bg-gray-800/40 border border-gray-800 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center text-gray-400">
+            <span>Pumps Power Relay</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-5"></span>
+          </div>
+        </div>
+
+        <!-- Emergency Kill -->
+        <button onclick="sendCommand('N')" class="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-4 rounded-lg shadow border border-red-800 transition-all duration-200 mt-4 tracking-wider">
+          EMERGENCY SYSTEM STOP (KILL)
+        </button>
+
+        <!-- Diagnostics -->
+        <button onclick="sendCommand('R')" class="w-full bg-gray-800 hover:bg-red-950/20 hover:border-red-900/50 text-red-400 border border-gray-700 py-3 rounded-lg font-semibold text-center transition-all duration-200 text-xs uppercase tracking-wider mt-3">
+          Reboot ESP32
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Column 2 & 3: Telemetry & Live Graphs -->
+    <div class="space-y-6 lg:col-span-2">
+      
+      <!-- Telemetry Highlights Grid -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <!-- Temp -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
+          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Temperature</span>
+          <span id="temp-val" class="text-3xl font-extrabold text-white">--.-</span>
+          <span class="text-gray-400 font-semibold">&deg;C</span>
+        </div>
+        <!-- Del Flow -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
+          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Delivery Flow</span>
+          <span id="flow0-val" class="text-3xl font-extrabold text-white">--.-</span>
+          <span class="text-gray-400 font-semibold"> LPM</span>
+          <div class="mt-1.5 text-[11px] text-gray-500 font-medium">
+            Pump Speed: <span id="pwm0-val" class="text-cyan-400 font-bold">--</span>%
+          </div>
+        </div>
+        <!-- Rec Flow -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
+          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Recovery Flow</span>
+          <span id="flow1-val" class="text-3xl font-extrabold text-white">--.-</span>
+          <span class="text-gray-400 font-semibold"> LPM</span>
+          <div class="mt-1.5 text-[11px] text-gray-500 font-medium">
+            Pump Speed: <span id="pwm1-val" class="text-orange-400 font-bold">--</span>%
+          </div>
+        </div>
+        <!-- Pressure -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
+          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Pressure</span>
+          <span id="pressure-val" class="text-3xl font-extrabold text-white">---</span>
+          <span class="text-gray-400 font-semibold"> kPa</span>
+        </div>
+      </div>
+
+      <!-- Live Graphs -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Temp Chart -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm">
+          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Temperature History</h3>
+          <div class="h-48">
+            <canvas id="tempChart"></canvas>
+          </div>
+        </div>
+        <!-- Flow Chart -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm">
+          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Flow Rates History</h3>
+          <div class="h-48">
+            <canvas id="flowChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Logs Window -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider">System Log Monitor</h3>
+          <button onclick="clearLogs()" class="text-xs text-gray-500 hover:text-gray-300">Clear Logs</button>
+        </div>
+        <div id="log-monitor" class="h-48 bg-gray-950 border border-gray-800 rounded p-3 font-mono text-xs text-green-500 overflow-y-auto space-y-1">
+          <div class="text-gray-500">// Console log initialized, waiting for MQTT connection...</div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    let mqttClient = null;
+    let pingInterval = null;
+    const inTopic = "monsoon_inTopic";
+    const outTopic = "monsoon_outTopic";
+
+    // Charting Configurations
+    const maxDataPoints = 60;
+    const tempChartCtx = document.getElementById('tempChart').getContext('2d');
+    const flowChartCtx = document.getElementById('flowChart').getContext('2d');
+
+    const tempChart = new Chart(tempChartCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Temperature (°C)',
+          data: [],
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34, 211, 238, 0.1)',
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { display: false },
+          y: { 
+            min: 20,
+            max: 60,
+            grid: { color: '#1f2937' }, 
+            ticks: { color: '#9ca3af' } 
+          }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    const flowChart = new Chart(flowChartCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Delivery (LPM)',
+            data: [],
+            borderColor: '#60a5fa',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false
+          },
+          {
+            label: 'Recovery (LPM)',
+            data: [],
+            borderColor: '#f97316',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { display: false },
+          y: { 
+            min: 0,
+            max: 12,
+            grid: { color: '#1f2937' }, 
+            ticks: { color: '#9ca3af' } 
+          }
+        },
+        plugins: { legend: { labels: { color: '#9ca3af', boxWidth: 10 } } }
+      }
+    });
+
+    function addChartData(chart, label, datasetIndex, value) {
+      if (chart.data.labels.length > maxDataPoints) {
+        chart.data.labels.shift();
+      }
+      chart.data.labels.push(label);
+      
+      if (chart.data.datasets[datasetIndex].data.length > maxDataPoints) {
+        chart.data.datasets[datasetIndex].data.shift();
+      }
+      chart.data.datasets[datasetIndex].data.push(value);
+      chart.update('none'); // Update without animation for performance
+    }
+
+    // Logger
+    function appendLog(message) {
+      const monitor = document.getElementById('log-monitor');
+      const logDiv = document.createElement('div');
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML = `<span class="text-gray-500">[${time}]</span> ${message}`;
+      monitor.appendChild(logDiv);
+      monitor.scrollTop = monitor.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('log-monitor').innerHTML = '';
+    }
+
+    // Connect/Disconnect Handler
+    function toggleConnection() {
+      if (mqttClient && mqttClient.connected) {
+        mqttClient.end();
+        return;
+      }
+
+      const host = document.getElementById('mqtt-host').value;
+      const clientId = document.getElementById('mqtt-clientid').value;
+      const username = document.getElementById('mqtt-user').value;
+      const password = document.getElementById('mqtt-pass').value;
+
+      appendLog(`Connecting to ${host}...`);
+      document.getElementById('btn-connect').innerText = "Connecting...";
+      document.getElementById('btn-connect').className = "w-full bg-yellow-600 text-white font-semibold py-2 px-4 rounded";
+
+      const options = {
+        clientId: clientId,
+        clean: true,
+        connectTimeout: 5000,
+        reconnectPeriod: 2000
+      };
+      if (username) options.username = username;
+      if (password) options.password = password;
+
+      mqttClient = mqtt.connect(host, options);
+
+      mqttClient.on('connect', () => {
+        appendLog("<span class='text-green-400'>Connected to MQTT Broker!</span>");
+        document.getElementById('btn-connect').innerText = "Disconnect";
+        document.getElementById('btn-connect').className = "w-full bg-red-600 hover:bg-red-500 text-white font-semibold py-2 px-4 rounded";
+        document.getElementById('conn-indicator').className = "w-4 h-4 rounded-full bg-green-500";
+        
+        mqttClient.subscribe(outTopic);
+        appendLog(`Subscribed to topic: ${outTopic}`);
+        
+        // Trigger an immediate background check for firmware updates upon page connection
+        sendCommand('o');
+
+        // Periodically ping the ESP32 every 10 seconds to keep the telemetry stream active
+        pingInterval = setInterval(() => {
+          if (mqttClient && mqttClient.connected) {
+            sendCommand('p');
+          }
+        }, 10000);
+      });
+
+      mqttClient.on('error', (err) => {
+        appendLog(`<span class='text-red-500'>Connection error: ${err.message}</span>`);
+        handleDisconnectState();
+      });
+
+      mqttClient.on('close', () => {
+        appendLog("<span class='text-yellow-500'>Disconnected from Broker.</span>");
+        handleDisconnectState();
+      });
+
+      mqttClient.on('message', (topic, message) => {
+        const payload = message.toString();
+        resetLivenessTimer();
+        parseTelemetry(payload);
+      });
+    }
+
+    let livenessTimer = null;
+    function resetLivenessTimer() {
+      if (livenessTimer) clearTimeout(livenessTimer);
+      livenessTimer = setTimeout(() => {
+        setESP32Offline(false);
+      }, 6000); // 6 seconds liveness timeout
+    }
+
+    function setESP32Offline(rebooting = false) {
+      updateIndicatorDot('mqtt-dot', 'R255G0B0');
+      updateIndicatorDot('wifi-dot', 'R255G0B0');
+      
+      const stateDisplay = document.getElementById('state-display');
+      if (stateDisplay) {
+        if (rebooting) {
+          stateDisplay.innerText = "REBOOTING...";
+          stateDisplay.className = "px-3 py-1 bg-gray-800 border border-yellow-800 rounded-md font-semibold text-yellow-500 animate-pulse";
+        } else {
+          stateDisplay.innerText = "OFFLINE";
+          stateDisplay.className = "px-3 py-1 bg-gray-800 border border-red-800 rounded-md font-semibold text-red-500 animate-pulse";
+        }
+      }
+
+      document.getElementById('temp-val').innerText = "--.-";
+      document.getElementById('flow0-val').innerText = "--.-";
+      document.getElementById('flow1-val').innerText = "--.-";
+      document.getElementById('pressure-val').innerText = "---";
+      document.getElementById('pwm0-val').innerText = "--";
+      document.getElementById('pwm1-val').innerText = "--";
+      document.getElementById('ota-version-display').innerText = "v--";
+      const badge = document.getElementById('ota-update-badge');
+      if (badge) badge.style.display = 'none';
+      const btn = document.getElementById('ota-update-btn');
+      if (btn) btn.style.display = 'none';
+    }
+
+    function handleDisconnectState() {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = null;
+      }
+      document.getElementById('btn-connect').innerText = "Connect";
+      document.getElementById('btn-connect').className = "w-full bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 px-4 rounded";
+      document.getElementById('conn-indicator').className = "w-4 h-4 rounded-full bg-red-500";
+      document.getElementById('state-display').innerText = "DISCONNECTED";
+      document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-red-500";
+      
+      // Reset WiFi and MQTT indicator dots to red (offline)
+      const wifiDot = document.getElementById('wifi-dot');
+      if (wifiDot) {
+        wifiDot.style.backgroundColor = 'rgb(239, 68, 68)';
+        wifiDot.style.boxShadow = 'none';
+      }
+      const mqttDot = document.getElementById('mqtt-dot');
+      if (mqttDot) {
+        mqttDot.style.backgroundColor = 'rgb(239, 68, 68)';
+        mqttDot.style.boxShadow = 'none';
+      }
+    }
+
+    // Telemetry Parser (*Xdata*)
+    function parseTelemetry(msg) {
+      if (!msg.startsWith('*') || !msg.endsWith('*')) return;
+      
+      const content = msg.slice(1, -1);
+      if (content.length === 0) return;
+
+      const type = content[0];
+      const data = content.slice(1);
+
+      switch (type) {
+        case 'M': // Temperature rolling data
+          const temp = parseFloat(data);
+          if (!isNaN(temp)) {
+            document.getElementById('temp-val').innerText = temp.toFixed(1);
+            addChartData(tempChart, '', 0, temp);
+          }
+          break;
+
+        case 'N': // Flow rates: flow0,flow1
+          const flows = data.split(',');
+          if (flows.length === 2) {
+            const flow0 = parseFloat(flows[0]);
+            const flow1 = parseFloat(flows[1]);
+            if (!isNaN(flow0) && !isNaN(flow1)) {
+              document.getElementById('flow0-val').innerText = flow0.toFixed(1);
+              document.getElementById('flow1-val').innerText = flow1.toFixed(1);
+              const label = '';
+              addChartData(flowChart, label, 0, flow0);
+              addChartData(flowChart, label, 1, flow1);
+            }
+          }
+          break;
+
+        case 'f': // Scavenge/Recovery Pump speed percentage
+          document.getElementById('pwm1-val').innerText = data;
+          break;
+
+        case 'F': // Delivery Pump speed percentage
+          document.getElementById('pwm0-val').innerText = data;
+          break;
+
+        case 'Z': // OTA Version (Z string ends with '*' if update is available)
+          document.getElementById('ota-version-display').innerText = 'v' + data;
+          const badge = document.getElementById('ota-update-badge');
+          const btn = document.getElementById('ota-update-btn');
+          if (data.endsWith('*')) {
+            if (badge) {
+              badge.style.display = 'inline-flex';
+              badge.innerText = 'New Update available';
+            }
+            if (btn) btn.style.display = 'inline-block';
+          } else {
+            if (badge) badge.style.display = 'none';
+            if (btn) btn.style.display = 'none';
+          }
+          break;
+
+        case 'P': // Pressure
+          const press = parseFloat(data);
+          if (!isNaN(press)) {
+            document.getElementById('pressure-val').innerText = Math.round(press);
+          }
+          break;
+
+        case 't': // Temperature setpoint
+          const setpoint = parseFloat(data);
+          if (!isNaN(setpoint)) {
+            document.getElementById('setpoint-val').innerText = setpoint.toFixed(1);
+          }
+          break;
+
+        case 's': // State and substate
+          document.getElementById('state-display').innerText = data;
+          document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-cyan-400";
+          break;
+
+        case 'n': // Next state
+          document.getElementById('next-state-display').innerText = data;
+          break;
+
+        case 'i': // Intended relay enable states
+          updateRelayLeds(data);
+          break;
+
+        case 'x': // MQTT Status LED (indicator dot)
+          updateIndicatorDot('mqtt-dot', data);
+          break;
+
+        case 'y': // WiFi Status LED (indicator dot)
+          updateIndicatorDot('wifi-dot', data);
+          break;
+
+        case 'L': // Logs
+          appendLog(`<span class="text-cyan-300">${data}</span>`);
+          break;
+      }
+    }
+
+    function updateIndicatorDot(elementId, rgbString) {
+      const match = rgbString.match(/R(\d+)G(\d+)B(\d+)/);
+      if (match) {
+        const r = match[1];
+        const g = match[2];
+        const b = match[3];
+        const dot = document.getElementById(elementId);
+        if (dot) {
+          dot.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+          // Apply glow if LED is active (non-zero RGB)
+          if (r > 0 || g > 0 || b > 0) {
+            dot.style.boxShadow = `0 0 8px rgb(${r}, ${g}, ${b})`;
+          } else {
+            dot.style.boxShadow = 'none';
+          }
+        }
+      }
+    }
+
+    function updateRelayLeds(relayBits) {
+      // Intended relay bits: RPINLET (0), RPDRAIN (1), RPDELIVER (2), RPHEATERA (3), RPHEATER (4), RPPUMP (5)
+      // Toggle color state of LEDs based on bit values
+      for (let i = 0; i < 6; i++) {
+        const isEn = relayBits[i] === '1';
+        let ledId = `led-relay-${i}`;
+        let btnId = `btn-relay-${i}`;
+        
+        if (i === 4) continue; // RPHEATER (4) doesn't have an override button on grid
+        if (i === 5) {
+          const led = document.getElementById(ledId);
+          if (led) {
+            led.className = isEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+          }
+          continue;
+        }
+        
+        const led = document.getElementById(ledId);
+        const btn = document.getElementById(btnId);
+        if (led && btn) {
+          led.className = isEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+          btn.className = isEn 
+            ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
+            : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
+        }
+      }
+
+      // Pumps and valves index mapping
+      const burpEn = relayBits[6] === '1';
+      const scavengeEn = relayBits[7] === '1';
+      const deliveryEn = relayBits[8] === '1';
+      
+      const ledBurp = document.getElementById('led-burp-valve');
+      if (ledBurp) {
+        ledBurp.className = burpEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+      }
+
+      const btnScavenge = document.getElementById('btn-pump-0');
+      if (btnScavenge) {
+        btnScavenge.className = scavengeEn
+          ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
+          : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
+      }
+
+      const btnDelivery = document.getElementById('btn-pump-1');
+      if (btnDelivery) {
+        btnDelivery.className = deliveryEn
+          ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
+          : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
+      }
+    }
+
+    // Outbound Command Emitter
+    function sendCommand(charCmd) {
+      if (!mqttClient || !mqttClient.connected) {
+        appendLog("<span class='text-red-500'>Cannot send command: not connected to broker.</span>");
+        return;
+      }
+      mqttClient.publish(inTopic, charCmd);
+      if (charCmd === 'R') {
+        setESP32Offline(true);
+      }
+    }
+
+    // Auto-generate a random client ID to prevent broker conflicts
+    document.getElementById('mqtt-clientid').value = 'monsoon_web_ui_' + Math.floor(Math.random() * 10000);
+  </script>
+</body>
+</html>
