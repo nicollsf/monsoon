@@ -736,11 +736,25 @@ void loop_autopause(void)
     case PAUSE_DONE:
       if( just_entered ) {
         btLog("PAUSE: Idling.");
-        setup_pins(); // Force all relays off safely
-        temp_controlmode = TCNONE; 
-        htrs_enable = 0; // Explicitly disable heaters during PAUSE
+        // Safely turn off pumps, heaters, and water circuits, but keep RPBALLVALVE closed
+        setrelay_en(RPINLET, ROFF);
+        setrelay_en(RPDRAIN, ROFF);
+        setrelay_en(RPDELIVER, ROFF);
+        setrelay_en(RPBURP, ROFF);
+        setrelay_en(RPPUMP, ROFF);
         setrelay_en(RPHEATER, ROFF);
         setrelay_en(RPHEATERA, ROFF);
+        setpump_en(RPUMPR, ROFF);
+        setpump_en(RPUMPD, ROFF);
+        setrelay(RPINLET, ROFF);
+        setrelay(RPDRAIN, ROFF);
+        setrelay(RPDELIVER, ROFF);
+        setrelay(RPBURP, ROFF);
+        setrelay(RPPUMP, ROFF);
+        setrelay(RPHEATER, ROFF);
+        setrelay(RPHEATERA, ROFF);
+        temp_controlmode = TCNONE; 
+        htrs_enable = 0; // Explicitly disable heaters during PAUSE
       }
       break;
   }
@@ -1109,6 +1123,16 @@ void auto_switchstate(int state, String reason)
   auto_substate = 0;
 
   rpinsen_reset();
+  if (auto_state != STATE_OFF && auto_state != STATE_NONE && auto_state != STATE_CALIBT && auto_state != STATE_CALIBDUMP) {
+    // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT)
+    setrelay_en(RPBALLVALVE, RON);
+    setrelay(RPBALLVALVE, RON);
+  } else {
+    // Open ball valve when system is in OFF / idle state
+    setrelay_en(RPBALLVALVE, ROFF);
+    setrelay(RPBALLVALVE, ROFF);
+  }
+
   switch( auto_state ) {
     case STATE_NONE:  auto_nextstate = STATE_OFF;  break;
     case STATE_OFF:  auto_nextstate = STATE_FILL;  break;

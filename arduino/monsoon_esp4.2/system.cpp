@@ -5,19 +5,19 @@
 //int RPINS0_EN[8], RPINS1_EN[8];  // target values
 //int rpins_changed;
 
-int RPINS_EN[7];  // target values
+int RPINS_EN[8];  // target values
 int rpins_reset_cnt = 0;
 //void setrelay(int rpin, bool rval) { digitalWrite(RPINS[rpin], rval==ROFF ? RPINS_ROFF[rpin] : !RPINS_ROFF[rpin]); }
 int rpins_changed;
 void dumprelays(void)
 {
   String mstr;
-  for( int i=0; i<7; i++ ) {
+  for( int i=0; i<8; i++ ) {
     if( getrelay_en(i)==ROFF ) mstr += 0;
     else mstr += 1;
   }
   mstr += " ";
-  for( int i=0; i<7; i++ ) {
+  for( int i=0; i<8; i++ ) {
     if( getrelay(i)==ROFF ) mstr += 0;
     else mstr += 1;
   }
@@ -27,8 +27,8 @@ void dumprelays(void)
 void setup_pins()
 {
   // Digital outputs for relays
-  for( int i=0; i<7; i++ ) pinMode(RPINS[i], OUTPUT);
-  for( int i=0; i<7; i++ ) setrelay(i, ROFF);
+  for( int i=0; i<8; i++ ) pinMode(RPINS[i], OUTPUT);
+  for( int i=0; i<8; i++ ) setrelay(i, ROFF);
   rpinsen_reset();
   rpins_changed = 0;
 

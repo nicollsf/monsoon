@@ -1,0 +1,9 @@
+{
+  "Configurations": [
+    {
+      "Version": "1.0.37",
+      "URL": "http://10.0.0.9/ota/firmware.bin",
+      "Board": "ESP32"
+    }
+  ]
+}

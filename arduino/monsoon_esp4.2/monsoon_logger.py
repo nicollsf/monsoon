@@ -13,7 +13,7 @@ except ImportError:
     sys.exit(1)
 
 # Configurations
-MQTT_BROKER = "10.0.0.7"
+MQTT_BROKER = "10.0.0.9"
 MQTT_PORT = 1883
 TOPIC_TELEMETRY = "monsoon_outTopic"
 TOPIC_LOGS = "monsoon_outlog"

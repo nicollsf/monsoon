@@ -11,7 +11,7 @@
 //byte mac[]    = {  0x08, 0xB6, 0x1F, 0x3B, 0x67, 0x44 };
 //IPAddress ip(172, 16, 0, 100);
 //IPAddress server(34, 89, 101, 249);
-const IPAddress server(10, 0, 0, 7);  // local RPi
+const IPAddress server(10, 0, 0, 9);  // local RPi
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>

@@ -108,6 +108,15 @@ void serialcmd(char cmd)
     setrelay_en(rno, !getrelay_en(rno));
   }
 
+  // Toggle Motorised Ball Valve (Pin 5)
+  if ( cmd == 'v' || cmd == 'V' ) {
+    bool current_state = getrelay(RPBALLVALVE);
+    bool next_state = (current_state == ROFF) ? RON : ROFF;
+    setrelay_en(RPBALLVALVE, next_state);
+    setrelay(RPBALLVALVE, next_state);
+    btLog("Toggle: Ball Valve " + String(next_state == RON ? "CLOSED" : "OPEN"));
+  }
+
   // Speed control enable pumps
   if ( cmd == 'm' || cmd == 'n') {
     if( cmd=='m' ) {
@@ -221,7 +230,7 @@ void report_rpins()
   String mstr;
 
   mstr = "*i";
-  for( int i=0; i<7; i++ ) {
+  for( int i=0; i<8; i++ ) {
     if( getrelay_en(i)==ROFF ) mstr += "0";
     else mstr += "1";
   }
@@ -233,7 +242,7 @@ void report_rpins()
   btSerial.println(mstr);  //Serial.println(mstr);
 
   mstr = "*k";
-  for( int i=0; i<7; i++ ) {
+  for( int i=0; i<8; i++ ) {
     if( getrelay(i)==ROFF ) mstr += "0";
     else mstr += "1";
   }
@@ -245,6 +254,21 @@ void report_rpins()
   btSerial.println(mstr);  //Serial.println(mstr);
   
   rpins_lastreport = millis();
+}
+
+// Report ball valve status (v) - ON/Green when CLOSED, OFF/Black when OPEN
+unsigned long valve_lastreport = 0;
+unsigned long valve_period = 1000;
+void report_valve_status(void)
+{
+  if( getrelay(RPBALLVALVE) == RON ) {
+    btSerial.println("*vR0G255B0*");
+    btSerial.println("*v1*");
+  } else {
+    btSerial.println("*vR0G0B0*");
+    btSerial.println("*v0*");
+  }
+  valve_lastreport = millis();
 }
 
 
@@ -518,6 +542,7 @@ void report_status(void)
 {
   if( millis()-otaversion_lastreport>=otaversion_period ) report_otaversion();
   if( millis()-rpins_lastreport>=rpins_period ) report_rpins();
+  if( millis()-valve_lastreport>=valve_period ) report_valve_status();
   if( millis()-tsvals_lastreport>=tsvals_period ) report_tsvals();
   if( millis()-fsvals_lastreport>=fsvals_period ) report_fsvals();
   if( millis()-lsvals_lastreport>=lsvals_period ) report_lsvals();

@@ -5,8 +5,8 @@
 // #include <WiFi.h>
 // #include "ESP32OTAPull.h"
 
-#define OTA_JSON_URL   "http://10.0.0.7/ota/monsoon.json" // JSON filter file (see below)
-#define OTA_VERSION    "1.0.31" // The current version of this program
+#define OTA_JSON_URL   "http://10.0.0.9/ota/monsoon.json" // JSON filter file (see below)
+#define OTA_VERSION    "1.0.37" // The current version of this program
 
 
 void ota_update(void);

@@ -7,7 +7,7 @@ import json
 
 OTA_H_PATH = "ota.h"
 BINARY_PATH = ".pio/build/esp32_monsoon/firmware.bin"
-PI_USER_IP = "nicolls@10.0.0.7"
+PI_USER_IP = "nicolls@10.0.0.9"
 PI_JSON_PATH = "/var/www/html/ota/monsoon.json"
 PI_BIN_DIR = "/var/www/html/ota"
 
@@ -78,22 +78,27 @@ def deploy_to_pi(new_version):
     if scp_html_result.returncode != 0:
         print("Warning: scp upload of monsoon.html failed.")
 
-    # Update JSON file on the Pi
-    print("Updating monsoon.json configuration on the Pi...")
-    # Python script runner on Pi to safely load and update the JSON version
-    py_cmd = (
-        f"python3 -c \""
-        f"import json; "
-        f"f=open('{PI_JSON_PATH}', 'r+'); "
-        f"d=json.load(f); "
-        f"d['Configurations'][0]['Version']='{new_version}'; "
-        f"f.seek(0); "
-        f"json.dump(d, f, indent=2); "
-        f"f.truncate()\""
-    )
-    ssh_result = subprocess.run(["ssh", PI_USER_IP, py_cmd])
-    if ssh_result.returncode != 0:
-        print("Error: Failed to update monsoon.json on the Pi.")
+    # Generate and upload monsoon.json configuration file
+    print("Uploading monsoon.json configuration to the Pi...")
+    json_data = {
+        "Configurations": [
+            {
+                "Version": new_version,
+                "URL": "http://10.0.0.9/ota/firmware.bin",
+                "Board": "ESP32"
+            }
+        ]
+    }
+    with open("monsoon.json", "w") as jf:
+        json.dump(json_data, jf, indent=2)
+
+    scp_json_result = subprocess.run([
+        "scp",
+        "monsoon.json",
+        f"{PI_USER_IP}:{PI_JSON_PATH}"
+    ])
+    if scp_json_result.returncode != 0:
+        print("Error: Failed to upload monsoon.json to the Pi.")
         sys.exit(1)
 
 def main():

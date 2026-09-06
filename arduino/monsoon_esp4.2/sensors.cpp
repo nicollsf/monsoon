@@ -84,67 +84,17 @@ void loop_levelsens(void)
 //   Temperature sensing (onewire DS18B20)
 // ----------------------------------------------------------------------
 
-// Temperature sensor
-#include <DallasTemperature.h>
-#define ONE_WIRE_BUS TSAPIN
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-
-int temp_resolution = 12;
-//int temp_measureperiod = 5000;  // millis
-int temp_convertdelay = 0;  // millis (calculated in setup from resolution)
-int temp_idle;
-unsigned long temp_lastconvertrequest = 0;
-unsigned long temp_lastupdate = 0;
-DeviceAddress temp0_DeviceAddress;
+// Temperature sensor (DS18B20 OneWire - Retired to free GPIO 5 for RPBALLVALVE)
 float temp0 = -1000.0;
-//float temp_setpoint = 41.0;
 
 void setup_tempsens0(void)
 {
-  Serial.println("Calling begin on DallasTemperature sensor");
-  sensors.begin();
-
-  int available = sensors.getDeviceCount();
-  Serial.print("Sensors available: ");  Serial.println(available, DEC);
-
-  sensors.getAddress(temp0_DeviceAddress, 0);
-  temp_convertdelay = 750 / (1 << (12 - temp_resolution));
-  sensors.setResolution(temp0_DeviceAddress, temp_resolution);
- 
-  sensors.setWaitForConversion(false);
-  sensors.requestTemperatures();
-  temp_lastconvertrequest = millis();
-  temp_idle = 0;  // conversion in progress
+  // Retired
 }
 
 void loop_tempsens0(void)
 {
-  float ttemp; 
-  
-  // Start new conversion if required
-  if( temp_idle == 1 ) {
-    if( millis() - temp_lastconvertrequest >= temp_measureperiod ) {
-      //Log("Requesting temperature...");
-      sensors.requestTemperatures();
-      temp_lastconvertrequest = millis();
-      temp_idle = 0;  // conversion in progress
-    }
-    return;
-  }
-
-  // Handle ready temperature measurement
-  ttemp = sensors.getTempCByIndex(0);  // first device on bus
-  if( ttemp>0 && ttemp<70 ) temp0 = ttemp;
-  else {
-    static float last_logged_invalid_temp = 999.0;
-    if (ttemp != last_logged_invalid_temp) {
-      Serial.println("Ignoring invalid temp0=" + String(ttemp));
-      last_logged_invalid_temp = ttemp;
-    }
-  }
- 
-  temp_idle = 1;  //  ready for next
+  // Retired
 }
 
 

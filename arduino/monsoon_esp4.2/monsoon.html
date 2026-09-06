@@ -54,7 +54,7 @@
       <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4 text-sm">
         <div>
           <label class="block text-gray-400 mb-1">Host (WebSocket URL)</label>
-          <input type="text" id="mqtt-host" value="ws://10.0.0.7:9001" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
+          <input type="text" id="mqtt-host" value="ws://10.0.0.9:9001" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-cyan-500">
         </div>
         <div>
           <label class="block text-gray-400 mb-1">Client ID</label>
@@ -112,46 +112,56 @@
         <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">MANUAL OVERRIDES</h2>
         
         <div class="grid grid-cols-2 gap-3 text-sm">
-          <!-- Inlet -->
+          <!-- Inlet Valve -->
           <button onclick="sendCommand('f')" id="btn-relay-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Inlet Valve</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-0"></span>
           </button>
-          <!-- Drain -->
+          <!-- Drain Valve -->
           <button onclick="sendCommand('g')" id="btn-relay-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Drain Valve</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-1"></span>
           </button>
-          <!-- Delivery Valve -->
+          <!-- Deliver Valve -->
           <button onclick="sendCommand('h')" id="btn-relay-2" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Deliver Valve</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-2"></span>
+          </button>
+          <!-- Ball Valve (Motorised) -->
+          <button onclick="sendCommand('v')" id="btn-relay-7" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Ball Valve</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-7"></span>
+          </button>
+          <!-- Main Heater -->
+          <button onclick="sendCommand('j')" id="btn-relay-4" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Main Heater</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-4"></span>
           </button>
           <!-- Aux Heater -->
           <button onclick="sendCommand('i')" id="btn-relay-3" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Aux Heater (A)</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-3"></span>
           </button>
-          <!-- Main Pump -->
-          <button onclick="sendCommand('j')" id="btn-pump-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+          <!-- Scavenge Pump -->
+          <button onclick="sendCommand('m')" id="btn-pump-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Scavenge Pump</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-0"></span>
           </button>
           <!-- Delivery Pump -->
-          <button onclick="sendCommand('k')" id="btn-pump-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+          <button onclick="sendCommand('n')" id="btn-pump-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Delivery Pump</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-1"></span>
           </button>
           <!-- Burp Valve -->
-          <div class="bg-gray-800/40 border border-gray-800 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center text-gray-400">
+          <button onclick="sendCommand('l')" id="btn-relay-6" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Burp Valve (Bleed)</span>
-            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-burp-valve"></span>
-          </div>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-6"></span>
+          </button>
           <!-- Pumps Power Relay -->
-          <div class="bg-gray-800/40 border border-gray-800 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center text-gray-400">
-            <span>Pumps Power Relay</span>
+          <button onclick="sendCommand('k')" id="btn-relay-5" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Pumps Safety Relay</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-5"></span>
-          </div>
+          </button>
         </div>
 
         <!-- Emergency Kill -->
@@ -591,50 +601,43 @@
     }
 
     function updateRelayLeds(relayBits) {
-      // Intended relay bits: RPINLET (0), RPDRAIN (1), RPDELIVER (2), RPHEATERA (3), RPHEATER (4), RPPUMP (5)
-      // Toggle color state of LEDs based on bit values
-      for (let i = 0; i < 6; i++) {
+      if (!relayBits || relayBits.length < 10) return;
+
+      // Update 8 Relays (0..7: Inlet, Drain, Deliver, AuxHeater, MainHeater, PumpSafety, Burp, BallValve)
+      for (let i = 0; i < 8; i++) {
         const isEn = relayBits[i] === '1';
-        let ledId = `led-relay-${i}`;
-        let btnId = `btn-relay-${i}`;
-        
-        if (i === 4) continue; // RPHEATER (4) doesn't have an override button on grid
-        if (i === 5) {
-          const led = document.getElementById(ledId);
-          if (led) {
-            led.className = isEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
-          }
-          continue;
-        }
-        
-        const led = document.getElementById(ledId);
-        const btn = document.getElementById(btnId);
-        if (led && btn) {
+        const led = document.getElementById(`led-relay-${i}`);
+        const btn = document.getElementById(`btn-relay-${i}`);
+        if (led) {
           led.className = isEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+        }
+        if (btn) {
           btn.className = isEn 
             ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
             : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
         }
       }
 
-      // Pumps and valves index mapping
-      const burpEn = relayBits[6] === '1';
-      const scavengeEn = relayBits[7] === '1';
-      const deliveryEn = relayBits[8] === '1';
-      
-      const ledBurp = document.getElementById('led-burp-valve');
-      if (ledBurp) {
-        ledBurp.className = burpEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
-      }
+      // Update 2 Pumps (Bit 8 = Scavenge Pump, Bit 9 = Delivery Pump)
+      const scavengeEn = relayBits[8] === '1';
+      const deliveryEn = relayBits[9] === '1';
 
+      const ledScavenge = document.getElementById('led-pump-0');
       const btnScavenge = document.getElementById('btn-pump-0');
+      if (ledScavenge) {
+        ledScavenge.className = scavengeEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+      }
       if (btnScavenge) {
         btnScavenge.className = scavengeEn
           ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
           : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
       }
 
+      const ledDelivery = document.getElementById('led-pump-1');
       const btnDelivery = document.getElementById('btn-pump-1');
+      if (ledDelivery) {
+        ledDelivery.className = deliveryEn ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+      }
       if (btnDelivery) {
         btnDelivery.className = deliveryEn
           ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
