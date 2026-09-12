@@ -1,6 +1,7 @@
 // Fred Nicolls, March 2024
 
 #include <Arduino.h>
+#include <ESPmDNS.h>
 #include "lwifi.h"
 #include "system.h"
 #include "ota.h"
@@ -60,21 +61,10 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info){
       break;
     case ARDUINO_EVENT_WIFI_SCAN_DONE:
       if( wifilog>=1 ) Serial.println("WiFiEvent(SCAN_DONE): Completed scan for access points");
-
-      // Get index of strongest network
       bestssid = wifi_getbestssid();
-      if( bestssid>=0 ) Serial.println("Best SSID is " + ssids[bestssid]);
-      
-      WiFi.scanDelete();  // forget scanned networks
       break;
     case ARDUINO_EVENT_WIFI_STA_START:
       if( wifilog>=2 ) Serial.println("WiFiEvent(STA_START): WiFi client started");
-      if( wifilog>=2 ) Serial.println("WiFiEvent(STA_START): calling WiFi.scanNetworks(true)");
-      WiFi.disconnect();
-      if( millis()-lastScanMillis>SCAN_PERIOD ) {
-        lastScanMillis = millis();
-        WiFi.scanNetworks(true);
-      }
       break;
     case ARDUINO_EVENT_WIFI_STA_STOP:
       if( wifilog>=2 ) Serial.println("WiFiEvent(STA_STOP): WiFi clients stopped");
@@ -86,20 +76,6 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info){
       if( wifilog>=2 ) Serial.println("WiFiEvent(STA_DISCONNECTED): Disconnected from WiFi access point");
       if( wifilog>=2 ) Serial.print("WiFiEvent(STA_DISCONNECTED): reason=");
       if( wifilog>=2 ) Serial.println(WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
-
-      switch( info.wifi_sta_disconnected.reason ) {
-        case WIFI_REASON_NO_AP_FOUND:
-          if( currentMillis-lastScanMillis>SCAN_DURATION ) {
-            if( wifilog>=2 ) Serial.println("WiFiEvent(REASON_NO_AP_FOUND): calling WiFi.scanNetworks(true)");
-            WiFi.disconnect();
-            if( millis()-lastScanMillis>SCAN_PERIOD ) {
-              lastScanMillis = millis();
-              WiFi.scanNetworks(true);
-            }
-      }
-          break;
-      }
-
       break;
     case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
       if( wifilog>=1 ) Serial.println("WiFiEvent(STA_AUTHMODE_CHANGE): Authentication mode of access point has changed");
@@ -107,6 +83,12 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info){
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       if( wifilog>=1 ) Serial.print("WiFiEvent(STA_GOT_IP): Obtained IP address: ");
       Serial.println(WiFi.localIP());
+      if (MDNS.begin("monsoon")) {
+        Serial.println("mDNS responder started: http://monsoon.local");
+        MDNS.addService("http", "tcp", 80);
+      } else {
+        Serial.println("Error setting up MDNS responder!");
+      }
       break;
     case ARDUINO_EVENT_WIFI_STA_LOST_IP:
       if( wifilog>=1 ) Serial.println("WiFiEvent(STA_LOST_IP): Lost IP address and IP address is reset to 0");
@@ -176,10 +158,14 @@ void setup_wifi()
   
   // Start wifi
   bestssid = -1;
+  lastScanMillis = 0;
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname("esp32-monsoon"); // Set custom hostname for DHCP
+  WiFi.setHostname("monsoon"); // Set custom hostname for DHCP
   WiFi.disconnect();
   delay(100);
+  Serial.println("setup_wifi: calling WiFi.scanNetworks(true)");
+  lastScanMillis = millis();
+  WiFi.scanNetworks(true);
 }
 
 
@@ -187,38 +173,19 @@ void loop_wifi()
 {
   unsigned long currentMillis = millis();
 
-  // switch( WiFi.status() ) {
-  //   case WL_STOPPED:  Serial.println("WL_STOPPED");  break;
-  //   case WL_CONNECTED:  Serial.println("WL_CONNECTED");  break;
-  //   case WL_NO_SHIELD:  Serial.println("WL_NO_SHIELD");  break;
-  //   case WL_IDLE_STATUS:  Serial.println("WL_IDLE_STATUS");  break;
-  //   case WL_CONNECT_FAILED:  Serial.println("WL_CONNECT_FAILED");  break;
-  //   case WL_NO_SSID_AVAIL:  Serial.println("WL_NO_SSID_AVAIL");  break; 
-  //   case WL_SCAN_COMPLETED:  Serial.println("WL_SCAN_COMPLETED");  break; 
-  //   case WL_CONNECTION_LOST:  Serial.println("WL_CONNECTION_LOST");  break;
-  //   case WL_DISCONNECTED:  Serial.println("WL_DISCONNECTED");  break;  
-  //   default:  Serial.println("WiFi.status() returned " + String(WiFi.status()));
-  // }
-
-  int status = WiFi.status();
-  if( status==WL_STOPPED || status==WL_DISCONNECTED ) {
-    if( bestssid==-1 ) {
-      if( currentMillis-lastScanMillis>SCAN_PERIOD ) {
-        Serial.println("Calling WiFi.scanNetworks(true)");
-        lastScanMillis = millis();
-        WiFi.scanNetworks(true);
-      }
-    }
-    else {
-      lastConnMillis = millis();
+  if( WiFi.status() != WL_CONNECTED ) {
+    if( bestssid >= 0 ) {
+      lastConnMillis = currentMillis;
       Serial.println("Calling WiFi.begin for " + ssids[bestssid]);
       WiFi.begin(ssids[bestssid].c_str(), ssidpasses[bestssid].c_str());  
-      bestssid = -1; // Reset to call WiFi.begin only once per scan
+      bestssid = -1;
+    }
+    else if( currentMillis - lastScanMillis > SCAN_PERIOD ) {
+      Serial.println("Calling WiFi.scanNetworks(true)");
+      lastScanMillis = currentMillis;
+      WiFi.scanNetworks(true);
     }
   }
-
-  // Timeout so trigger reconnect of wifi to best network
-  if( WiFi.status()!=WL_CONNECTED && currentMillis-lastConnMillis>CONNECT_PERIOD ) bestssid = -1;
 
   return;
 }

@@ -23,27 +23,35 @@
 <body class="bg-gray-950 text-gray-100 font-sans min-h-screen pb-10">
 
   <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex flex-wrap justify-between items-center shadow-md">
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex flex-wrap justify-between items-center shadow-md gap-4">
     <div class="flex items-center space-x-3">
-      <div class="w-4 h-4 rounded-full bg-red-500 animate-pulse" id="conn-indicator"></div>
+      <div class="w-4 h-4 rounded-full bg-red-500" id="conn-indicator"></div>
       <h1 class="text-xl font-bold tracking-wide flex items-center flex-wrap gap-y-2">
-        <span>MONSOON SHOWER CONTROL</span>
+        <span>MONSOON SHOWER</span>
         <span id="ota-version-display" class="text-xs text-gray-500 font-semibold ml-2.5 px-1.5 py-0.5 bg-gray-800 border border-gray-800 rounded">v--</span>
         <span id="ota-update-badge" style="display: none;" class="text-[10px] font-bold text-gray-950 bg-green-400 px-2 py-0.5 rounded-full ml-2 uppercase animate-pulse">v-- available</span>
-        <button id="ota-update-btn" style="display: none;" onclick="sendCommand('O')" class="bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded ml-2 border border-green-700 transition-all duration-200 uppercase tracking-wider shadow">Update Now</button>
+        <button id="ota-update-btn" style="display: none;" onclick="triggerOTAUpdate()" class="bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded ml-2 border border-green-700 transition-all duration-200 uppercase tracking-wider shadow">Update Now</button>
       </h1>
     </div>
-    <div class="flex items-center space-x-5 mt-2 sm:mt-0 text-sm">
-      <span class="flex items-center space-x-2">
-        <span class="text-gray-400">WiFi:</span>
-        <span id="wifi-dot" class="w-3.5 h-3.5 rounded-full bg-red-500 shadow-md shadow-red-500/30 transition-all duration-300"></span>
-      </span>
-      <span class="flex items-center space-x-2">
-        <span class="text-gray-400">MQTT:</span>
-        <span id="mqtt-dot" class="w-3.5 h-3.5 rounded-full bg-red-500 shadow-md shadow-red-500/30 transition-all duration-300"></span>
-      </span>
-      <span class="text-gray-400">State:</span>
-      <span id="state-display" class="px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-cyan-400">DISCONNECTED</span>
+    <div class="flex items-center flex-wrap gap-4 text-xs sm:text-sm">
+      <!-- Broker Status (GUI to Pi) -->
+      <div class="flex items-center space-x-1.5 px-2.5 py-1 bg-gray-800/80 rounded-md border border-gray-700/60 shadow-inner">
+        <span class="text-gray-400 font-medium">Broker:</span>
+        <span id="broker-status-pill" class="text-red-400 font-bold">DISCONNECTED</span>
+      </div>
+      <!-- Monsoon Link Status (ESP32 to Pi) -->
+      <div class="flex items-center space-x-1.5 px-2.5 py-1 bg-gray-800/80 rounded-md border border-gray-700/60 shadow-inner">
+        <span class="text-gray-400 font-medium">Monsoon:</span>
+        <span id="monsoon-status-pill" class="text-red-400 font-bold flex items-center gap-1.5">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" id="monsoon-dot"></span>
+          <span id="monsoon-status-text">OFFLINE</span>
+        </span>
+      </div>
+      <!-- System State -->
+      <div class="flex items-center space-x-1.5">
+        <span class="text-gray-400 font-medium">State:</span>
+        <span id="state-display" class="px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-gray-400">DISCONNECTED</span>
+      </div>
     </div>
   </header>
 
@@ -385,8 +393,24 @@
         appendLog("<span class='text-green-400'>Connected to MQTT Broker!</span>");
         document.getElementById('btn-connect').innerText = "Disconnect";
         document.getElementById('btn-connect').className = "w-full bg-red-600 hover:bg-red-500 text-white font-semibold py-2 px-4 rounded";
-        document.getElementById('conn-indicator').className = "w-4 h-4 rounded-full bg-green-500";
+        document.getElementById('conn-indicator').className = "w-4 h-4 rounded-full bg-green-500 shadow-sm shadow-green-500/50";
         
+        const brokerPill = document.getElementById('broker-status-pill');
+        if (brokerPill) {
+          brokerPill.innerText = "CONNECTED";
+          brokerPill.className = "text-green-400 font-bold";
+        }
+        const dot = document.getElementById('monsoon-dot');
+        const text = document.getElementById('monsoon-status-text');
+        const pill = document.getElementById('monsoon-status-pill');
+        if (dot && text && pill) {
+          dot.className = "w-2.5 h-2.5 rounded-full bg-yellow-500 animate-pulse inline-block";
+          pill.className = "text-yellow-400 font-bold flex items-center gap-1.5";
+          text.innerText = "WAITING FOR SIGNAL...";
+        }
+        document.getElementById('state-display').innerText = "WAITING FOR SIGNAL...";
+        document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-yellow-800/80 rounded-md font-semibold text-yellow-400 animate-pulse";
+
         mqttClient.subscribe(outTopic);
         appendLog(`Subscribed to topic: ${outTopic}`);
         
@@ -414,11 +438,40 @@
       mqttClient.on('message', (topic, message) => {
         const payload = message.toString();
         resetLivenessTimer();
+        updateMonsoonStatusDisplay(true);
         parseTelemetry(payload);
       });
     }
 
+    let isOtaUpdating = false;
+    let isRebooting = false;
     let livenessTimer = null;
+    let monsoonIP = "";
+    let monsoonRSSI = "";
+
+    function updateMonsoonStatusDisplay(online) {
+      const dot = document.getElementById('monsoon-dot');
+      const text = document.getElementById('monsoon-status-text');
+      const pill = document.getElementById('monsoon-status-pill');
+      if (!dot || !text || !pill) return;
+
+      if (online) {
+        dot.className = "w-2.5 h-2.5 rounded-full bg-green-500 shadow-sm shadow-green-500/50 inline-block";
+        pill.className = "text-green-400 font-bold flex items-center gap-1.5";
+        let statusStr = "ONLINE";
+        if (monsoonIP) {
+          statusStr += ` (${monsoonIP}`;
+          if (monsoonRSSI) statusStr += `, ${monsoonRSSI}dBm`;
+          statusStr += `)`;
+        }
+        text.innerText = statusStr;
+      } else {
+        dot.className = "w-2.5 h-2.5 rounded-full bg-red-500 inline-block";
+        pill.className = "text-red-400 font-bold flex items-center gap-1.5";
+        text.innerText = "OFFLINE (NO SIGNAL)";
+      }
+    }
+
     function resetLivenessTimer() {
       if (livenessTimer) clearTimeout(livenessTimer);
       livenessTimer = setTimeout(() => {
@@ -427,16 +480,18 @@
     }
 
     function setESP32Offline(rebooting = false) {
-      updateIndicatorDot('mqtt-dot', 'R255G0B0');
-      updateIndicatorDot('wifi-dot', 'R255G0B0');
+      updateMonsoonStatusDisplay(false);
       
       const stateDisplay = document.getElementById('state-display');
       if (stateDisplay) {
-        if (rebooting) {
+        if (isOtaUpdating) {
+          stateDisplay.innerText = "FLASHING & REBOOTING...";
+          stateDisplay.className = "px-3 py-1 bg-gray-800 border border-amber-800 rounded-md font-semibold text-amber-400 animate-pulse";
+        } else if (rebooting || isRebooting) {
           stateDisplay.innerText = "REBOOTING...";
           stateDisplay.className = "px-3 py-1 bg-gray-800 border border-yellow-800 rounded-md font-semibold text-yellow-500 animate-pulse";
         } else {
-          stateDisplay.innerText = "OFFLINE";
+          stateDisplay.innerText = "MONSOON OFFLINE";
           stateDisplay.className = "px-3 py-1 bg-gray-800 border border-red-800 rounded-md font-semibold text-red-500 animate-pulse";
         }
       }
@@ -447,11 +502,13 @@
       document.getElementById('pressure-val').innerText = "---";
       document.getElementById('pwm0-val').innerText = "--";
       document.getElementById('pwm1-val').innerText = "--";
-      document.getElementById('ota-version-display').innerText = "v--";
-      const badge = document.getElementById('ota-update-badge');
-      if (badge) badge.style.display = 'none';
-      const btn = document.getElementById('ota-update-btn');
-      if (btn) btn.style.display = 'none';
+      if (!isOtaUpdating) {
+        document.getElementById('ota-version-display').innerText = "v--";
+        const badge = document.getElementById('ota-update-badge');
+        if (badge) badge.style.display = 'none';
+        const btn = document.getElementById('ota-update-btn');
+        if (btn) btn.style.display = 'none';
+      }
     }
 
     function handleDisconnectState() {
@@ -466,20 +523,23 @@
       document.getElementById('btn-connect').innerText = "Connect";
       document.getElementById('btn-connect').className = "w-full bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 px-4 rounded";
       document.getElementById('conn-indicator').className = "w-4 h-4 rounded-full bg-red-500";
-      document.getElementById('state-display').innerText = "DISCONNECTED";
-      document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-red-500";
       
-      // Reset WiFi and MQTT indicator dots to red (offline)
-      const wifiDot = document.getElementById('wifi-dot');
-      if (wifiDot) {
-        wifiDot.style.backgroundColor = 'rgb(239, 68, 68)';
-        wifiDot.style.boxShadow = 'none';
+      const brokerPill = document.getElementById('broker-status-pill');
+      if (brokerPill) {
+        brokerPill.innerText = "DISCONNECTED";
+        brokerPill.className = "text-red-400 font-bold";
       }
-      const mqttDot = document.getElementById('mqtt-dot');
-      if (mqttDot) {
-        mqttDot.style.backgroundColor = 'rgb(239, 68, 68)';
-        mqttDot.style.boxShadow = 'none';
+      const dot = document.getElementById('monsoon-dot');
+      const text = document.getElementById('monsoon-status-text');
+      const pill = document.getElementById('monsoon-status-pill');
+      if (dot && text && pill) {
+        dot.className = "w-2.5 h-2.5 rounded-full bg-gray-600 inline-block";
+        pill.className = "text-gray-500 font-bold flex items-center gap-1.5";
+        text.innerText = "UNKNOWN (BROKER OFFLINE)";
       }
+
+      document.getElementById('state-display').innerText = "DISCONNECTED FROM BROKER";
+      document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-red-500";
     }
 
     // Telemetry Parser (*Xdata*)
@@ -525,15 +585,26 @@
           break;
 
         case 'Z': // OTA Version (Z string ends with '*' if update is available)
-          document.getElementById('ota-version-display').innerText = 'v' + data;
+          const cleanVersion = data.replace(/\*+$/, '');
+          document.getElementById('ota-version-display').innerText = 'v' + cleanVersion;
           const badge = document.getElementById('ota-update-badge');
           const btn = document.getElementById('ota-update-btn');
+          if (isOtaUpdating) {
+            isOtaUpdating = false;
+            appendLog(`<span class='text-green-400 font-bold'>Firmware successfully updated to v${cleanVersion}!</span>`);
+          }
           if (data.endsWith('*')) {
             if (badge) {
               badge.style.display = 'inline-flex';
               badge.innerText = 'New Update available';
+              badge.className = "text-[10px] font-bold text-gray-950 bg-green-400 px-2 py-0.5 rounded-full ml-2 uppercase animate-pulse";
             }
-            if (btn) btn.style.display = 'inline-block';
+            if (btn) {
+              btn.style.display = 'inline-block';
+              btn.disabled = false;
+              btn.innerText = 'Update Now';
+              btn.className = "bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded ml-2 border border-green-700 transition-all duration-200 uppercase tracking-wider shadow cursor-pointer";
+            }
           } else {
             if (badge) badge.style.display = 'none';
             if (btn) btn.style.display = 'none';
@@ -564,7 +635,26 @@
           break;
 
         case 'i': // Intended relay enable states
+        case 'k': // Physical relay states
           updateRelayLeds(data);
+          break;
+
+        case 'v': // Ball valve specific status
+          if (data.startsWith('R')) {
+            updateIndicatorDot('led-relay-7', data);
+          } else if (data === '1' || data === '0') {
+            const isClosed = (data === '1');
+            const led = document.getElementById('led-relay-7');
+            const btn = document.getElementById('btn-relay-7');
+            if (led) {
+              led.className = isClosed ? "w-3 h-3 rounded-full bg-green-500 shadow-lg shadow-green-500/50" : "w-3 h-3 rounded-full bg-gray-600";
+            }
+            if (btn) {
+              btn.className = isClosed 
+                ? "bg-gray-900 border border-green-600/50 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200"
+                : "bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200";
+            }
+          }
           break;
 
         case 'x': // MQTT Status LED (indicator dot)
@@ -573,6 +663,16 @@
 
         case 'y': // WiFi Status LED (indicator dot)
           updateIndicatorDot('wifi-dot', data);
+          break;
+
+        case 'I': // ESP32 IP Address
+          monsoonIP = data;
+          updateMonsoonStatusDisplay(true);
+          break;
+
+        case 'r': // WiFi RSSI dBm
+          monsoonRSSI = data;
+          updateMonsoonStatusDisplay(true);
           break;
 
         case 'L': // Logs
@@ -645,6 +745,35 @@
       }
     }
 
+    // OTA Update Action with UI state feedback
+    function triggerOTAUpdate() {
+      if (!mqttClient || !mqttClient.connected) {
+        appendLog("<span class='text-red-500'>Cannot update: not connected to broker.</span>");
+        return;
+      }
+      isOtaUpdating = true;
+      const btn = document.getElementById('ota-update-btn');
+      const badge = document.getElementById('ota-update-badge');
+      const stateDisplay = document.getElementById('state-display');
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span class="inline-block animate-spin mr-1">&#8635;</span> Flashing...`;
+        btn.className = "bg-amber-600 text-white text-[10px] font-bold px-3 py-1 rounded ml-2 border border-amber-700 uppercase tracking-wider shadow cursor-not-allowed opacity-90";
+      }
+      if (badge) {
+        badge.style.display = 'inline-flex';
+        badge.innerText = 'Applying update (~15s)...';
+        badge.className = "text-[10px] font-bold text-gray-950 bg-amber-400 px-2 py-0.5 rounded-full ml-2 uppercase animate-pulse";
+      }
+      if (stateDisplay) {
+        stateDisplay.innerText = "FLASHING & REBOOTING...";
+        stateDisplay.className = "px-3 py-1 bg-gray-800 border border-amber-800 rounded-md font-semibold text-amber-400 animate-pulse";
+      }
+      appendLog("<span class='text-amber-400 font-semibold'>OTA Update initiated: downloading firmware and writing to flash (~15s)...</span>");
+      sendCommand('O');
+    }
+
     // Outbound Command Emitter
     function sendCommand(charCmd) {
       if (!mqttClient || !mqttClient.connected) {
@@ -653,12 +782,22 @@
       }
       mqttClient.publish(inTopic, charCmd);
       if (charCmd === 'R') {
+        isRebooting = true;
         setESP32Offline(true);
       }
     }
 
-    // Auto-generate a random client ID to prevent broker conflicts
-    document.getElementById('mqtt-clientid').value = 'monsoon_web_ui_' + Math.floor(Math.random() * 10000);
+    // Auto-generate unique client ID and auto-resolve host
+    const currentHost = window.location.hostname || "10.0.0.9";
+    document.getElementById('mqtt-host').value = `ws://${currentHost}:9001`;
+    document.getElementById('mqtt-clientid').value = 'monsoon_web_' + Math.random().toString(16).substring(2, 8);
+
+    // Auto-connect on load
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        toggleConnection();
+      }, 300);
+    });
   </script>
 </body>
 </html>

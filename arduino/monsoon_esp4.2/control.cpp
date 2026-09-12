@@ -27,9 +27,19 @@ void loop_heaters(void)
   bool temp_safe = (temp1 <= htrs_maxtemp);
   bool level_safe = !tank_empty; // Level is safe if the tank is not empty
 
+  static unsigned long level_safe_since = 0;
+  if (!level_safe) {
+    level_safe_since = 0;
+  } else if (level_safe_since == 0) {
+    level_safe_since = millis();
+  }
+
+  // Require level to be continuously safe for at least 3000ms before re-arming heaters
+  bool level_confirmed_safe = level_safe && (level_safe_since != 0) && (millis() - level_safe_since >= 3000);
+
   static unsigned long last_heater_switch_time = 0;
 
-  // Force heaters off if disabled or unsafe (Safety cut-out bypasses the lockout)
+  // Force heaters off immediately if disabled or unsafe (Safety cut-out bypasses the lockout)
   if( !htrs_enable || htrs_forcedisable || !level_safe || !temp_safe ) {
     if( getrelay(RPHEATER)==RON || getrelay(RPHEATERA)==RON ) {
       String reason = "Safety Cutout: Heaters forced OFF because: ";
@@ -48,8 +58,8 @@ void loop_heaters(void)
     return;
   }
 
-  // 3000ms lockout guard to prevent relay bouncing/chatter
-  if (millis() - last_heater_switch_time < 3000) {
+  // Wait for both level confirmation debounce and relay anti-chatter lockout
+  if (!level_confirmed_safe || (millis() - last_heater_switch_time < 3000)) {
     return;
   }
 
@@ -363,6 +373,7 @@ void setpump_lpm(int rpump, float lpm) {
 TCMODE temp_controlmode = TCNONE;
 TCMODE temp_controlmodelast = TCNONE;
 float temp_setpoint = 50.0;
+unsigned long wash_speed_start_time = 0;
 //float temp_reqsetpoint = temp_setpoint;
 
 void setup_tempcontrol(void) {
@@ -412,10 +423,17 @@ void loop_tempcontrol(void)
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        // In TCSPEED mode, heaters are on by default, and PID controls flow.
-        // The bang-bang controller is disabled to prevent interference.
-        setrelay_en(RPHEATER, RON);
-        setrelay_en(RPHEATERA, RON);
+        // In TCSPEED mode, heaters provide base heat while PID controls flow rate.
+        // After an initial stabilization window (25s to absorb WARM state preheating),
+        // if flow is clipped (e.g. scavenge restriction) and temp climbs > setpoint + 1.5°C,
+        // cut heaters to prevent over-temperature/scalding.
+        if (millis() - wash_speed_start_time > 25000 && temp1 > temp_setpoint + 1.5f) {
+          setrelay_en(RPHEATER, ROFF);
+          setrelay_en(RPHEATERA, ROFF);
+        } else if (temp1 < temp_setpoint + 0.5f || (millis() - wash_speed_start_time <= 25000)) {
+          setrelay_en(RPHEATER, RON);
+          setrelay_en(RPHEATERA, RON);
+        }
         loop_tempcontrolwithspeed();
       }
       break;
@@ -476,14 +494,15 @@ void setup_tempcontrolwithspeed(void)
 {
   // Set the target temperature for the PID controller.
   tc_pidsetpoint = temp_setpoint;
+  // Initialize PID output to a conservative starting flow (4.0 LPM)
+  tc_pidoutput = 4.0;
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  // Set the output limits in Litres Per Minute (LPM).
-  // Constrained to 3-9 LPM to prevent extreme over-correction and thermal shock.
-  myPID.SetOutputLimits(3.0, 9.0); 
-  // Evaluate less frequently (every 2 seconds) to better match the thermal inertia
-  // of the water mass and prevent rapid micro-adjustments.
+  // Set the output limits in Litres Per Minute (LPM): 3.0 to 8.0 LPM
+  myPID.SetOutputLimits(3.0, 8.0); 
+  // Evaluate every 2 seconds
   myPID.SetSampleTime(2000);
+  wash_speed_start_time = millis();
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -491,5 +510,26 @@ void loop_tempcontrolwithspeed(void)
   tc_pidsetpoint = temp_setpoint;  
   if( temp1>-500.0 ) tc_pidinput = temp1;
   myPID.Compute(); 
-  setpump_lpm(RPUMPD, tc_pidoutput);
+
+  float target_delivery = tc_pidoutput;
+
+  // Mass-Balance Protection:
+  // 1. Initial 8-second soft-start window: keep delivery capped at 4.0 LPM until return flow starts.
+  if (millis() - wash_speed_start_time < 8000 && flow_lpm1 < 2.0f) {
+    target_delivery = min(target_delivery, 4.0f);
+  } else {
+    // 2. Continuous mass-balance guard: Delivery flow must never be less than 1.0 LPM slower than recovery.
+    // If recovery flow is measured, clamp delivery to: flow_lpm1 - 1.0 LPM (with 3.0 LPM minimum floor).
+    if (flow_lpm1 > 0.5f) {
+      float max_safe_delivery = max(3.0f, flow_lpm1 - 1.0f);
+      if (target_delivery > max_safe_delivery) {
+        target_delivery = max_safe_delivery;
+      }
+    }
+  }
+
+  // Hard clamp between 3.0 and 8.0 LPM
+  target_delivery = constrain(target_delivery, 3.0f, 8.0f);
+
+  setpump_lpm(RPUMPD, target_delivery);
 }

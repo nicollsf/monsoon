@@ -94,8 +94,6 @@ void setup_mqtt()
   client.setServer(server, 1883);
   client.setCallback(mqtt_callback);
   client.setSocketTimeout(2); // Set socket timeout to 2s to prevent loop hanging during connect attempts
-  mqtt_log("In setup_mqtt: calling mqtt_reconnect");
-  mqtt_reconnect();
 }
 
 

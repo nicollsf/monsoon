@@ -115,6 +115,8 @@ void serialcmd(char cmd)
     setrelay_en(RPBALLVALVE, next_state);
     setrelay(RPBALLVALVE, next_state);
     btLog("Toggle: Ball Valve " + String(next_state == RON ? "CLOSED" : "OPEN"));
+    report_valve_status();
+    report_rpins();
   }
 
   // Speed control enable pumps
@@ -465,6 +467,12 @@ void report_network_status(void)
       wifi_led = "*yR0G255B0*"; // Green (Good signal)
     } else {
       wifi_led = "*yR255G165B0*"; // Orange/Yellow (Okay/Weak signal)
+    }
+    static unsigned long last_ip_report = 0;
+    if (millis() - last_ip_report >= 3000) {
+      last_ip_report = millis();
+      btSerial.println("*I" + WiFi.localIP().toString() + "*");
+      btSerial.println("*r" + String(rssi) + "*");
     }
   }
 #endif

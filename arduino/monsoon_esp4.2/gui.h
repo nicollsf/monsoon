@@ -45,3 +45,5 @@ void btLog(String mess);
 void report_status(void);
 void report_tsvals(void);
 void report_state(void);
+void report_rpins(void);
+void report_valve_status(void);

@@ -84,8 +84,7 @@ def deploy_to_pi(new_version):
         "Configurations": [
             {
                 "Version": new_version,
-                "URL": "http://10.0.0.9/ota/firmware.bin",
-                "Board": "ESP32"
+                "URL": "http://10.0.0.9/ota/firmware.bin"
             }
         ]
     }

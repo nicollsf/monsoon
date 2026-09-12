@@ -56,18 +56,6 @@ void commsTask(void *pvParameters) {
 
 void setup() 
 {
-#if ENABLE_WIFI || ENABLE_MQTT || ENABLE_OTA
-  // Spawn the comms task on CPU Core 0, leaving CPU Core 1 dedicated to physical control loop safety
-  xTaskCreatePinnedToCore(
-    commsTask,
-    "CommsTask",
-    8192,        // Stack size in words (large enough for network client operations)
-    NULL,        // Parameter
-    1,           // Priority
-    NULL,        // Task handle
-    0            // Pinned to Core 0 (WiFi / network protocol stack core)
-  );
-#endif
   // Initialize NVS partition (required for fresh ESP32 modules)
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -75,18 +63,12 @@ void setup()
     err = nvs_flash_init();
   }
   
-  //wdt_disable();
   htrs_enable = 1;
 
-  int serialm = 0;
-  switch( serialm ) {
-    case 0:
-      Serial.begin(115200);
-      btSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
-      Serial.println("btSerial Txd is on pin: " + String(TXD2));
-      Serial.println("btSerial Rxd is on pin: " + String(RXD2));
-      break;
-  }
+  Serial.begin(115200);
+  btSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  Serial.println("btSerial Txd is on pin: " + String(TXD2));
+  Serial.println("btSerial Rxd is on pin: " + String(RXD2));
 
   esp_reset_reason_t reason = esp_reset_reason();
   if (reason == ESP_RST_TASK_WDT) {
@@ -107,6 +89,19 @@ void setup()
 #endif
 #if ENABLE_MQTT
   setup_mqtt();
+#endif
+
+#if ENABLE_WIFI || ENABLE_MQTT || ENABLE_OTA
+  // Spawn the comms task on CPU Core 0, leaving CPU Core 1 dedicated to physical control loop safety
+  xTaskCreatePinnedToCore(
+    commsTask,
+    "CommsTask",
+    8192,        // Stack size in words (large enough for network client operations)
+    NULL,        // Parameter
+    1,           // Priority
+    NULL,        // Task handle
+    0            // Pinned to Core 0 (WiFi / network protocol stack core)
+  );
 #endif
 
   setup_pins();

@@ -42,7 +42,24 @@ telemetry_data = {
     "flow1": "0.0",
     "pressure": "0",
     "pwm0": "0",
-    "pwm1": "0"
+    "pwm1": "0",
+    "ball_valve": "0",
+    "tank_empty": "0",
+    "tank_full": "0",
+    "inlet_en": "0",
+    "drain_en": "0",
+    "deliver_en": "0",
+    "heaterA_en": "0",
+    "heater_en": "0",
+    "pump_relay_en": "0",
+    "burp_en": "0",
+    "inlet_act": "0",
+    "drain_act": "0",
+    "deliver_act": "0",
+    "heaterA_act": "0",
+    "heater_act": "0",
+    "pump_relay_act": "0",
+    "burp_act": "0"
 }
 
 # Ensure log directory exists
@@ -76,27 +93,63 @@ def parse_telemetry(payload):
     updated = False
     
     for token in tokens:
-        if len(token) < 2:
+        if len(token) < 1:
             continue
         tag = token[0]
         val = token[1:]
         
-        if tag == 'T':
+        if tag == 'M': # Temperature (*M37.5*)
             telemetry_data["temp"] = val
             updated = True
-        elif tag == 't':
+        elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
             updated = True
-        elif tag == 'F':
-            telemetry_data["flow0"] = val
+        elif tag == 'N': # Flow rates (*N4.2,4.8*)
+            flows = val.split(',')
+            if len(flows) >= 1:
+                telemetry_data["flow0"] = flows[0].strip()
+            if len(flows) >= 2:
+                telemetry_data["flow1"] = flows[1].strip()
             updated = True
-        elif tag == 'f':
-            telemetry_data["flow1"] = val
+        elif tag == 'F': # Delivery pump speed % (*F85*)
+            telemetry_data["pwm0"] = val.strip()
             updated = True
-        elif tag == 'P':
-            telemetry_data["pressure"] = val
+        elif tag == 'f': # Scavenge pump speed % (*f90*)
+            telemetry_data["pwm1"] = val.strip()
             updated = True
-        elif tag == 's':
+        elif tag == 'P': # Pressure in kPa (*P120.5*)
+            telemetry_data["pressure"] = val.strip()
+            updated = True
+        elif tag == 'Q': # Level sensors: empty, full (*Q0100*)
+            if len(val) >= 2:
+                telemetry_data["tank_empty"] = val[0]
+                telemetry_data["tank_full"] = val[1]
+            updated = True
+        elif tag == 'v': # Ball valve status (1=closed, 0=open)
+            if len(val) >= 1 and val[0] in ('0', '1'):
+                telemetry_data["ball_valve"] = val[0]
+                updated = True
+        elif tag == 'i': # Intent relay bits (*i0000000000*)
+            if len(val) >= 8:
+                telemetry_data["inlet_en"] = val[0]
+                telemetry_data["drain_en"] = val[1]
+                telemetry_data["deliver_en"] = val[2]
+                telemetry_data["heaterA_en"] = val[3]
+                telemetry_data["heater_en"] = val[4]
+                telemetry_data["pump_relay_en"] = val[5]
+                telemetry_data["burp_en"] = val[6]
+            updated = True
+        elif tag == 'k': # Actual relay physical states (*k0000000000*)
+            if len(val) >= 8:
+                telemetry_data["inlet_act"] = val[0]
+                telemetry_data["drain_act"] = val[1]
+                telemetry_data["deliver_act"] = val[2]
+                telemetry_data["heaterA_act"] = val[3]
+                telemetry_data["heater_act"] = val[4]
+                telemetry_data["pump_relay_act"] = val[5]
+                telemetry_data["burp_act"] = val[6]
+            updated = True
+        elif tag == 's': # State: Substate (*sWASH: AUTO*)
             if ":" in val:
                 parts = val.split(":", 1)
                 telemetry_data["state"] = parts[0].strip()
@@ -159,8 +212,15 @@ def on_message(client, userdata, msg):
                     
                     # Write CSV Headers
                     csv_writer.writerow([
-                        "Timestamp", "State", "Substate", "Temp", 
-                        "Setpoint", "Flow0_Del", "Flow1_Rec", "Pressure", "PWM0", "PWM1"
+                        "Elapsed_ms", "State", "Substate", 
+                        "Temp", "Setpoint", 
+                        "Flow0_Del", "Flow1_Rec", 
+                        "PWM0", "PWM1", 
+                        "Filter_Yield", "Pressure", 
+                        "Tank_Empty", "Tank_Full", 
+                        "Inlet", "Drain", "Deliver", 
+                        "Htr_Main", "Htr_Aux", 
+                        "Ball_Valve", "Burp"
                     ])
                 except Exception as e:
                     print(f"Error creating session log file: {e}")
@@ -175,18 +235,38 @@ def on_message(client, userdata, msg):
                         wash_seconds += delta
                 last_tick_time = now_time
                 
+                elapsed_ms = int((now_time - session_start_time).total_seconds() * 1000)
+                
+                # Calculate recovery pump yield (LPM per % PWM duty) for direct filter health tracking
+                try:
+                    f1 = float(telemetry_data["flow1"])
+                    pwm1 = float(telemetry_data["pwm1"])
+                    filter_yield = f"{f1 / pwm1:.4f}" if pwm1 > 5.0 else "0.0000"
+                except Exception:
+                    filter_yield = "0.0000"
+
                 try:
                     csv_writer.writerow([
-                        now_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                        elapsed_ms,
                         telemetry_data["state"],
                         telemetry_data["substate"],
                         telemetry_data["temp"],
                         telemetry_data["setpoint"],
                         telemetry_data["flow0"],
                         telemetry_data["flow1"],
-                        telemetry_data["pressure"],
                         telemetry_data["pwm0"],
-                        telemetry_data["pwm1"]
+                        telemetry_data["pwm1"],
+                        filter_yield,
+                        telemetry_data["pressure"],
+                        telemetry_data["tank_empty"],
+                        telemetry_data["tank_full"],
+                        telemetry_data["inlet_act"],
+                        telemetry_data["drain_act"],
+                        telemetry_data["deliver_act"],
+                        telemetry_data["heater_act"],
+                        telemetry_data["heaterA_act"],
+                        telemetry_data["ball_valve"],
+                        telemetry_data["burp_act"]
                     ])
                     current_session_file.flush()
                 except Exception as e:

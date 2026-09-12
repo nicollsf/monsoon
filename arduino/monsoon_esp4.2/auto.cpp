@@ -229,15 +229,11 @@ unsigned long auto_scavengecontrolstime = 0;
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) return;
-  if( millis()-auto_scavengecontrolstime<500 ) return; // limit update rate
+  if( millis()-auto_scavengecontrolstime<250 ) return; // limit update rate
 
-  // We want the scavenge (recovery) pump to run slightly faster than the delivery pump
-  // The safety mechanism in loop_pumps_and_valves (via pump_safety_veto) will
-  // safely stop the pump at the hardware level if the tank is full,
-  // so we don't need to override the software intent here.
-  
+  // We want the scavenge (recovery) pump to run at least 1.0 LPM faster than the delivery pump
   if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
-  setpump_lpm(RPUMPR, flow_lpm0 + 0.5f);
+  setpump_lpm(RPUMPR, flow_lpm0 + 1.0f);
   
   auto_scavengecontrolstime = millis();
 }
@@ -254,10 +250,22 @@ enum autooff_states {
   OFF_DONE
 };
 const char *autooff_statestrs[] = {"NONE", "RELEASE", "DONE", "WTF"};
+unsigned long ball_valve_off_start = 0;
+const unsigned long BALL_VALVE_REOPEN_DELAY_MS = 300000; // 5 minutes in ms
+
 void loop_autooff(void)
 {
   if( auto_state!=STATE_OFF ) return;
   auto_substatestrs = autooff_statestrs;
+
+  // Reopen ball valve only after 5 minutes of continuous OFF state
+  if( getrelay(RPBALLVALVE) == RON ) {
+    if( millis() - ball_valve_off_start >= BALL_VALVE_REOPEN_DELAY_MS ) {
+      setrelay_en(RPBALLVALVE, ROFF);
+      setrelay(RPBALLVALVE, ROFF);
+      btLog("Ball Valve: Reopened after 5 minutes in state OFF.");
+    }
+  }
 
   // Handle substates
   switch( auto_substate ) {
@@ -343,7 +351,7 @@ void loop_autofill(void)
       if( just_entered ) {
         btLog("FILL: Starting circulation and stabilising flow.");
         setpump_perc(RPUMPR, 100);
-        setpump_perc(RPUMPD, 50); // DELIVERY ~50%
+        setpump_perc(RPUMPD, 40); // DELIVERY ~40%
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPR, RON);
         setpump_en(RPUMPD, RON);
@@ -359,12 +367,12 @@ void loop_autofill(void)
 
     case FILL_OVERFILL_PUMP:
       if( just_entered ) {
-        btLog("FILL: Overfill pump stage. Run " + String(fill_overfill_count + 1) + "/" + String(fill_overfill_target) + ". Target: " + String(fill_overfill_volume_limit, 1) + "L.");
+        btLog("FILL: Overfill pump stage. Run " + String(fill_overfill_count + 1) + "/" + String(fill_overfill_target) + ". Target: " + String(fill_overfill_volume_limit, 1) + "L at 8 LPM.");
         setpump_en(RPUMPR, ROFF);
         auto_wtopupenable = 0;
         setrelay_en(RPINLET, ROFF);
         setrelay_en(RPDELIVER, RON);
-        setpump_perc(RPUMPD, 90);
+        setpump_lpm(RPUMPD, 8.0f);
         setpump_en(RPUMPD, RON);
         
         fill_overfill_volume_pumped = 0.0f;
@@ -1127,8 +1135,11 @@ void auto_switchstate(int state, String reason)
     // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT)
     setrelay_en(RPBALLVALVE, RON);
     setrelay(RPBALLVALVE, RON);
+  } else if (auto_state == STATE_OFF) {
+    // Entering state OFF: start the 5-minute timer before reopening the ball valve
+    ball_valve_off_start = millis();
   } else {
-    // Open ball valve when system is in OFF / idle state
+    // Open ball valve for calibration dump / none
     setrelay_en(RPBALLVALVE, ROFF);
     setrelay(RPBALLVALVE, ROFF);
   }
