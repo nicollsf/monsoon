@@ -539,15 +539,15 @@ void loop_autocalibf(void)
         auto_scavengecontrolenable = 0;
         htrs_enable = 0;
         temp_controlmode = TCOFF;
-        calibf_cycle = 0;
+        calibf_cycle = -1; // Start with unrecorded warmup/purge cycle
         for (int i = 0; i < CALIBF_MAX_CYCLES; i++) {
           calibf_del_pulses[i] = 0;
           calibf_rec_pulses[i] = 0;
           calibf_del_dur_ms[i] = 0;
           calibf_rec_dur_ms[i] = 0;
         }
-        btLog("CALIBF: Starting Comprehensive Multi-Point Flow Calibration (5 speeds).");
-        mqtt_log("CALIBF: Starting Comprehensive Multi-Point Flow Calibration (5 speeds: 30%, 40%, 52%, 65%, 80% PWM).");
+        btLog("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 5 speeds).");
+        mqtt_log("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 5 speeds: 30%, 40%, 52%, 65%, 80% PWM).");
       }
       if (tank_full) {
         auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
@@ -564,13 +564,13 @@ void loop_autocalibf(void)
       }
       if (tank_full) {
         setrelay_en(RPINLET, ROFF);
-        btLog("CALIBF: Tank full reached. Starting Cycle 1 Drain Phase.");
+        btLog("CALIBF: Tank full reached. Starting Warmup Drain Phase.");
         auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
       }
       break;
 
     case CALIBF_DRAIN_DELIVERY: {
-      float current_pwm = calibf_pwms[calibf_cycle];
+      float current_pwm = (calibf_cycle < 0) ? 50.0f : calibf_pwms[calibf_cycle];
       if( just_entered ) {
         flow_reset_total_pulses();
         calib_lastsettime = millis();
@@ -583,8 +583,13 @@ void loop_autocalibf(void)
         setpump_perc(RPUMPD, current_pwm);
         setpump_en(RPUMPD, RON);
 
-        String msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
-                     "] DRAIN: Running Delivery at " + String(current_pwm, 0) + "% PWM until Bottom Float...";
+        String msg;
+        if (calibf_cycle < 0) {
+          msg = "CALIBF [WARMUP] DRAIN: Running Delivery at 50% PWM to purge air & prime lines...";
+        } else {
+          msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
+                "] DRAIN: Running Delivery at " + String(current_pwm, 0) + "% PWM until Bottom Float...";
+        }
         btLog(msg);
         mqtt_log(msg);
       }
@@ -599,16 +604,24 @@ void loop_autocalibf(void)
       if (millis() - auto_substatestime > 5000 && tank_empty) {
         unsigned long dur = millis() - calib_lastsettime;
         unsigned long pulses = total_flow_pulses0;
-        calibf_del_pulses[calibf_cycle] = pulses;
-        calibf_del_dur_ms[calibf_cycle] = dur;
+        if (calibf_cycle >= 0) {
+          calibf_del_pulses[calibf_cycle] = pulses;
+          calibf_del_dur_ms[calibf_cycle] = dur;
+        }
 
         setpump_en(RPUMPD, ROFF);
         setpump_perc(RPUMPD, 0);
 
         float del_lpm = (10.0f / 82.0f) * ((float)pulses / (dur / 1000.0f));
-        String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Delivery Drained: " + 
-                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (avg " + 
-                         String(del_lpm, 2) + " LPM).";
+        String doneMsg;
+        if (calibf_cycle < 0) {
+          doneMsg = "CALIBF [WARMUP] Delivery Drained: " + String(pulses) + " pulses in " + 
+                    String(dur / 1000.0f, 1) + "s. Switching to Warmup Recovery...";
+        } else {
+          doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Delivery Drained: " + 
+                    String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (avg " + 
+                    String(del_lpm, 2) + " LPM).";
+        }
         btLog(doneMsg);
         mqtt_log(doneMsg);
 
@@ -618,7 +631,7 @@ void loop_autocalibf(void)
     }
 
     case CALIBF_FILL_RECOVERY: {
-      float current_pwm = calibf_pwms[calibf_cycle];
+      float current_pwm = (calibf_cycle < 0) ? 50.0f : calibf_pwms[calibf_cycle];
       if( just_entered ) {
         flow_reset_total_pulses();
         calib_lastsettime = millis();
@@ -629,8 +642,13 @@ void loop_autocalibf(void)
         setpump_perc(RPUMPR, current_pwm);
         setpump_en(RPUMPR, RON);
 
-        String msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
-                     "] FILL: Running Recovery at " + String(current_pwm, 0) + "% PWM until Top Float...";
+        String msg;
+        if (calibf_cycle < 0) {
+          msg = "CALIBF [WARMUP] FILL: Running Recovery at 50% PWM to fully de-aerate & wet turbine...";
+        } else {
+          msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
+                "] FILL: Running Recovery at " + String(current_pwm, 0) + "% PWM until Top Float...";
+        }
         btLog(msg);
         mqtt_log(msg);
       }
@@ -645,29 +663,39 @@ void loop_autocalibf(void)
       if (millis() - auto_substatestime > 5000 && tank_full) {
         unsigned long dur = millis() - calib_lastsettime;
         unsigned long pulses = total_flow_pulses1;
-        calibf_rec_pulses[calibf_cycle] = pulses;
-        calibf_rec_dur_ms[calibf_cycle] = dur;
+        if (calibf_cycle >= 0) {
+          calibf_rec_pulses[calibf_cycle] = pulses;
+          calibf_rec_dur_ms[calibf_cycle] = dur;
+        }
 
         setpump_en(RPUMPR, ROFF);
         setpump_perc(RPUMPR, 0);
 
-        float raw_rec_lpm = (10.0f / 82.0f) * ((float)pulses / (dur / 1000.0f));
-        float k_ratio = (calibf_del_pulses[calibf_cycle] > 0 && pulses > 0) ? 
-                        ((float)calibf_del_pulses[calibf_cycle] / (float)pulses) : 1.0f;
-        float corr_rec_lpm = raw_rec_lpm * k_ratio;
-
-        String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Recovery Filled: " + 
-                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (raw " + 
-                         String(raw_rec_lpm, 2) + " LPM, corrected " + String(corr_rec_lpm, 2) + 
-                         " LPM, K=" + String(k_ratio, 4) + ").";
-        btLog(doneMsg);
-        mqtt_log(doneMsg);
-
-        calibf_cycle++;
-        if (calibf_cycle < CALIBF_MAX_CYCLES) {
+        if (calibf_cycle < 0) {
+          String doneMsg = "CALIBF: Warmup cycle complete (lines de-aerated and primed). Starting official 5-point calibration...";
+          btLog(doneMsg);
+          mqtt_log(doneMsg);
+          calibf_cycle = 0;
           auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
         } else {
-          auto_switchsubstate(CALIBF_CALCULATE);
+          float raw_rec_lpm = (10.0f / 82.0f) * ((float)pulses / (dur / 1000.0f));
+          float k_ratio = (calibf_del_pulses[calibf_cycle] > 0 && pulses > 0) ? 
+                          ((float)calibf_del_pulses[calibf_cycle] / (float)pulses) : 1.0f;
+          float corr_rec_lpm = raw_rec_lpm * k_ratio;
+
+          String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Recovery Filled: " + 
+                           String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (raw " + 
+                           String(raw_rec_lpm, 2) + " LPM, corrected " + String(corr_rec_lpm, 2) + 
+                           " LPM, K=" + String(k_ratio, 4) + ").";
+          btLog(doneMsg);
+          mqtt_log(doneMsg);
+
+          calibf_cycle++;
+          if (calibf_cycle < CALIBF_MAX_CYCLES) {
+            auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
+          } else {
+            auto_switchsubstate(CALIBF_CALCULATE);
+          }
         }
       }
       break;
