@@ -12,7 +12,7 @@
 // ----------------------------------------------------------------------
 
 int auto_double = 1;  // main auto system mode
-const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "RINSE", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "CALIBP", "CALIBT", "CALDUMP", "WTF"};
+const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "RINSE", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "CALIBP", "CALIBT", "CALIBDUMP", "CALIBF", "WTF"};
 auto_states auto_state = STATE_NONE;
 auto_states auto_nextstate = STATE_OFF;
 const char *autonone_statestrs[] = {"NONE", "WTF"};
@@ -1185,7 +1185,8 @@ void auto_switchstate(int state, String reason)
       setpump_perc(RPUMPR, 100);
       setpump_en(RPUMPR, RON);
       break;
-    case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;  break;
+    case STATE_CALIBDUMP:  auto_nextstate = STATE_CALIBF;  break;
+    case STATE_CALIBF:     auto_nextstate = STATE_OFF;     break;
         
     case STATE_SETUP1:  auto_nextstate = STATE_WARM1;  break;
     case STATE_WARM1:  auto_nextstate = STATE_WASH1;  break;
