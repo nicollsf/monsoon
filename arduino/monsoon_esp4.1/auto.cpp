@@ -112,7 +112,7 @@ void loop_autowtopup(void)
   if( millis()-auto_wtopupopenstime<auto_wtopup_interval ) return;  // limit frequency
 
   // Open inlet if it's been too long since tank was high AND we are trying to recover
-  if( tank_empty && (millis() - auto_wtopuplasthightime > auto_wtopup_interval) ) {
+  if( !tank_full && (millis() - auto_wtopuplasthightime > auto_wtopup_interval) ) {
     if( getpump_en(RPUMPR) == RON && getrelay_en(RPINLET) == ROFF ) {
       if( auto_state == STATE_WASH ) {
         auto_wtopup_count++;
@@ -230,7 +230,7 @@ void loop_autoscavengecontrol(void)
   // so we don't need to override the software intent here.
   
   if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
-  setpump_lpm(RPUMPR, flow_lpm0 + 1.0f);
+  setpump_lpm(RPUMPR, flow_lpm0 + 0.5f);
   
   auto_scavengecontrolstime = millis();
 }
@@ -288,7 +288,7 @@ enum autofill_states {
 };
 const char *autofill_statestrs[] = {"NONE", "EMPTY", "HALF", "FULL", "PREPARE", "OF_PUMP", "OF_REFILL", "DONE", "WTF"};
 int fill_overfill_count = 0;
-const int fill_overfill_target = 2; // Number of repetitions
+const int fill_overfill_target = 1; // Number of repetitions
 
 void loop_autofill(void)
 {

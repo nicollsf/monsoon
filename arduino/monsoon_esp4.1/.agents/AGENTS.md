@@ -20,20 +20,25 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * `temp_safe`: Thermal cutoff (`current_temp <= MAX_TEMP_LIMIT`).
 * **The Rule:** If `safety_veto` is **True**, physical pins MUST be `ROFF` regardless of the `_en` intent.
 
-## 3. Hardware Constraints
+## 3. Hardware Constraints (ESP32 DevKit V1)
 
-* **Input-Only Pins:** Pins 34, 35, 36, and 39 are input-only (no internal pull-ups, no output capability).
+* **Input-Only Pins:** GPIO 34, 35, 36, and 39 are strictly input-only (no internal pull-ups, no output capability).
 * **Relay Logic:** Mixed Active High/Active Low logic is handled via the `RPINS_ROFF` array within the `setrelay()` wrapper.
 * **Sensor Mapping:**
-  * **Delivery Flow:** Water pumped to the shower head.
-    * Sensor `0`: `flow_lpm0`, `flow_cnt0`, `FSPINS[0]`
-  * **Recovery Flow:** Water returning from the shower pan.
-    * Sensor `1`: `flow_lpm1`, `flow_cnt1`, `FSPINS[1]`
-  * **Temperature (Control):** Fast NTC thermistor used for PID feedback.
-    * Sensor `1`: `temp1`, `TSA2PIN`
-  * **Temperature (Display):** Slower, more accurate Dallas DS18B20 sensor.
-    * Sensor `0`: `temp0`, `TSAPIN`
+  * **Delivery Flow (Delivery Pump):** 
+    * `flow_lpm0`, `flow_cnt0` $\rightarrow$ `FSPINS[0]` = **GPIO 25** (Moved from 36, requires external $4.7\text{k}\Omega$ pull-up).
+  * **Recovery Flow (Scavenge Pump):** 
+    * `flow_lpm1`, `flow_cnt1` $\rightarrow$ `FSPINS[1]` = **GPIO 26** (Moved from 39, requires external $4.7\text{k}\Omega$ pull-up).
+  * **Temperature (Control NTC Thermistor):** 
+    * `temp1` $\rightarrow$ `TSA2PIN` = **GPIO 39 / VN** (Requires external $15\text{k}\Omega$ series divider to 3.3V, NTC to GND).
+  * **Temperature (Display DS18B20 OneWire):** 
+    * *Freed/Retired* (frees GPIO 4 for Main Heater Relay 3).
+  * **Float Switches (Low & High):** 
+    * `LSPINS[0]` (Low) = **GPIO 36 / VP**, `LSPINS[1]` (High) = **GPIO 34**. (Input-only, require external $4.7\text{k}\Omega$ pull-ups).
+  * **Pressure Sensor:** 
+    * `PSPIN` = **GPIO 35** (Requires external $10\text{k}\Omega / 20\text{k}\Omega$ attenuation divider).
 * **Switching Guard:** A 3000ms `htrs_blocked` lockout is required to prevent relay bouncing/chatter.
+* **Safety Relay**: The pump power supply must run through a series mechanical relay (`RPINS[5]` / `RPINS[2]`) as a physical gatekeeper in series with the speed controllers to safeguard against MOSFET short-circuit failures.
 
 ## 4. Coding Style
 

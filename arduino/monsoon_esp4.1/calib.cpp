@@ -18,17 +18,8 @@ unsigned int calib_laststagetime;
 
 
 // Auto calibrate pumps
-enum autocalibp_states {
-  CALIBP_NONE = 0,
-  CALIBP_FILL,            // Fill tank to full
-  CALIBP_PREPARE,         // Prime and stabilise circuit
-  CALIBP_CALIB_DELIVERY,  // Calibrate delivery pump
-  CALIBP_SCAVENGE_PREP,   // Flood pan (scavenge off, delivery 90% until tank level low)
-  CALIBP_CALIB_SCAVENGE,  // Calibrate scavenge pump (with dynamic delivery)
-  CALIBP_DONE
-};
 
-std::vector<float> calib_pumpperc = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100};
+std::vector<float> calib_pumpperc = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
 std::vector<float> calib_dpumpmap, calib_rpumpmap;
 
 const char *autocalibp_statestrs[] = {"NONE", "FILL", "PREPARE", "CALIB_DEL", "SCAV_PREP", "CALIB_SCAV", "DONE", "WTF"};
@@ -113,7 +104,7 @@ void loop_autocalibp(void)
         return;
       }
 
-      if( millis() - calib_lastsettime >= 10000 ) {
+      if( millis() - calib_lastsettime >= 5000 ) {
         float measured_flow = flow_lpm0;
         calib_dpumpmap.push_back(measured_flow);
         btLog("CALIBP: Delivery " + String(calib_pumpperc[calib_cind], 0) + "% -> Flow: " + String(measured_flow, 2) + " LPM");
@@ -179,7 +170,7 @@ void loop_autocalibp(void)
         setpump_en(RPUMPD, ROFF);
       }
 
-      if( millis() - calib_lastsettime >= 10000 ) {
+      if( millis() - calib_lastsettime >= 5000 ) {
         float measured_flow = flow_lpm1;
         calib_rpumpmap.push_back(measured_flow);
         btLog("CALIBP: Scavenge " + String(calib_pumpperc[calib_cind], 0) + "% -> Flow: " + String(measured_flow, 2) + " LPM");

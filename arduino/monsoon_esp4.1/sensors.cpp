@@ -318,10 +318,14 @@ void loop_flowsens(void)
 
   // Measurement complete
   unsigned int flowsens_duration = millis() - flow_lastupdate;
-  float flfreq = (float)flow_cnt0 / flowsens_duration * 1000.0; // hertz
-  flow_lpm0 = 10.0 / 82 * flfreq;
-  flfreq = (float)flow_cnt1 / flowsens_duration * 1000.0;
-  flow_lpm1 = 10.0 / 82 * flfreq; // 10lpm==82Hz?
+  float flfreq0 = (float)flow_cnt0 / flowsens_duration * 1000.0; // hertz
+  flow_lpm0 = 10.0 / 82 * flfreq0;
+  float flfreq1 = (float)flow_cnt1 / flowsens_duration * 1000.0;
+  flow_lpm1 = 10.0 / 82 * flfreq1; // 10lpm==82Hz?
+
+  // Log to serial
+  Serial.printf("FlowSens: C0=%d, C1=%d, Dur=%u ms | Freq0=%.1f Hz, Freq1=%.1f Hz | LPM0=%.2f, LPM1=%.2f\n",
+                flow_cnt0, flow_cnt1, flowsens_duration, flfreq0, flfreq1, flow_lpm0, flow_lpm1);
 
   // Reset and start new measurement
   flow_cnt0 = 0;  flow_cnt1 = 0;

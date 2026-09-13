@@ -5,6 +5,7 @@
 #include "gui.h"
 #include <Preferences.h>
 #include "auto.h"
+#include "calib.h"
 
 
 // ----------------------------------------------------------------------
@@ -56,8 +57,13 @@ void loop_heaters(void)
 void loop_pumps_and_valves(void)
 {
   // If the tank is full, set safety vetoes for recovery pump and inlet valve.
+  // Exception: during scavenge pump calibration, we must keep the scavenge pump running to measure it.
   if (tank_full) {
-    pump_safety_veto = true;
+    if (auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) {
+      pump_safety_veto = false;
+    } else {
+      pump_safety_veto = true;
+    }
     inlet_safety_veto = true;
   } else {
     pump_safety_veto = false;
@@ -434,7 +440,7 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 // The correct implementation for this system (where a negative error results in an increased
 // output) is REVERSE mode with positive gains.
 // Detuned for a system with ~30s thermal dead time.
-double tc_Kp = 0.5, tc_Ki = 0.02, tc_Kd = 0.0;
+double tc_Kp = 0.25, tc_Ki = 0.01, tc_Kd = 0.0;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 void setup_tempcontrolwithspeed(void)
