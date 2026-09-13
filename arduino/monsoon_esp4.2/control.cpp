@@ -423,17 +423,71 @@ void loop_tempcontrol(void)
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        // In TCSPEED mode, heaters provide base heat while PID controls flow rate.
-        // After an initial stabilization window (25s to absorb WARM state preheating),
-        // if flow is clipped (e.g. scavenge restriction) and temp climbs > setpoint + 1.5°C,
-        // cut heaters to prevent over-temperature/scalding.
-        if (millis() - wash_speed_start_time > 25000 && temp1 > temp_setpoint + 1.5f) {
-          setrelay_en(RPHEATER, ROFF);
-          setrelay_en(RPHEATERA, ROFF);
-        } else if (temp1 < temp_setpoint + 0.5f || (millis() - wash_speed_start_time <= 25000)) {
-          setrelay_en(RPHEATER, RON);
-          setrelay_en(RPHEATERA, RON);
+        // Multi-stage Staged Thermal Control:
+        // Main heater (4kW, RPHEATER) + Aux heater (2kW, RPHEATERA) = 6kW total.
+        // Default: Stage 3 (6kW, both heaters ON) for normal high-flow showers.
+        // If recovery flow is restricted by a dirty filter and delivery is capped for >= 10s:
+        // - Stage 2 (4kW: Main ON, Aux OFF) if temp1 > temp_setpoint + 1.0°C (matches ~4-5 LPM)
+        // - Stage 1 (2kW: Main OFF, Aux ON) if temp1 > temp_setpoint + 1.8°C (matches ~2-3 LPM)
+        // - Stage 0 (0kW: Both OFF) if temp1 > temp_setpoint + 2.5°C
+        // Re-engage full power as water cools to <= temp_setpoint + 0.3°C or flow restriction clears.
+
+        static int current_power_stage = 3;
+        static unsigned long last_stage_switch_time = 0;
+        unsigned long now = millis();
+
+        extern bool delivery_flow_restricted;
+        extern unsigned long flow_restricted_since;
+
+        bool filter_restricted_persistent = delivery_flow_restricted && (flow_restricted_since != 0) && (now - flow_restricted_since >= 10000);
+
+        bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
+
+        if (!in_softstart && (now - wash_speed_start_time > 20000) && filter_restricted_persistent) {
+          if (temp1 > temp_setpoint + 2.5f && current_power_stage > 0) {
+            current_power_stage = 0;
+            last_stage_switch_time = now;
+          } else if (temp1 > temp_setpoint + 1.8f && current_power_stage > 1) {
+            if (now - last_stage_switch_time >= 3000) {
+              current_power_stage = 1;
+              last_stage_switch_time = now;
+            }
+          } else if (temp1 > temp_setpoint + 1.0f && current_power_stage > 2) {
+            if (now - last_stage_switch_time >= 3000) {
+              current_power_stage = 2;
+              last_stage_switch_time = now;
+            }
+          }
         }
+
+        // Hysteresis recovery: Step back up to full power if cooled, flow restriction cleared, or during soft-start
+        if (in_softstart || temp1 <= temp_setpoint + 0.3f || !delivery_flow_restricted || (now - wash_speed_start_time <= 20000)) {
+          if (current_power_stage < 3 && (now - last_stage_switch_time >= 3000)) {
+            current_power_stage = 3;
+            last_stage_switch_time = now;
+          }
+        }
+
+        // Apply heater intents based on active power stage
+        switch (current_power_stage) {
+          case 3: // 6 kW (100%)
+            setrelay_en(RPHEATER, RON);
+            setrelay_en(RPHEATERA, RON);
+            break;
+          case 2: // 4 kW (66%)
+            setrelay_en(RPHEATER, RON);
+            setrelay_en(RPHEATERA, ROFF);
+            break;
+          case 1: // 2 kW (33%)
+            setrelay_en(RPHEATER, ROFF);
+            setrelay_en(RPHEATERA, RON);
+            break;
+          case 0: // 0 kW (0%)
+            setrelay_en(RPHEATER, ROFF);
+            setrelay_en(RPHEATERA, ROFF);
+            break;
+        }
+
         loop_tempcontrolwithspeed();
       }
       break;
@@ -476,60 +530,82 @@ void loop_tempcontrolwithheater(void)
 // ----------------------------------------------------------------------
 #include <PID_v1.h>
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-// PID tuning parameters. Based on system response data from CALIBT.
-// Controller is DIRECT, but Kp is negative. An increase in temp (input) causes a more negative
-// error, which when multiplied by a negative Kp, increases the output (flow) to cool the system.
-// The Integral (I) term is necessary to eliminate steady-state error.
-// The Derivative (D) term is set to zero as it can amplify sensor noise in a slow thermal
-// system, causing erratic pump behavior.
-// NOTE: The previous implementation used DIRECT mode with negative gains. This is non-standard and
-// was causing the integral term to wind-up incorrectly, pinning the output at the minimum.
-// The correct implementation for this system (where a negative error results in an increased
-// output) is REVERSE mode with positive gains.
-// Detuned for a system with ~30s thermal dead time.
 double tc_Kp = 0.25, tc_Ki = 0.01, tc_Kd = 0.0;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
+
+bool delivery_flow_restricted = false;
+unsigned long flow_restricted_since = 0;
+static float flow_rec_smooth = 0.0f;
+static unsigned long last_delivery_calc_time = 0;
 
 void setup_tempcontrolwithspeed(void)
 {
   // Set the target temperature for the PID controller.
   tc_pidsetpoint = temp_setpoint;
-  // Initialize PID output to a conservative starting flow (4.0 LPM)
-  tc_pidoutput = 4.0;
+  // Initialize PID output to conservative starting flow (4.5 LPM)
+  tc_pidoutput = 4.5;
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  // Set the output limits in Litres Per Minute (LPM): 3.0 to 8.0 LPM
-  myPID.SetOutputLimits(3.0, 8.0); 
-  // Evaluate every 2 seconds
-  myPID.SetSampleTime(2000);
+  // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
+  myPID.SetOutputLimits(3.0, 8.5); 
+  // Evaluate every 1500 ms
+  myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
+  last_delivery_calc_time = millis();
+  flow_rec_smooth = 0.0f;
+  delivery_flow_restricted = false;
+  flow_restricted_since = 0;
 }
 
 void loop_tempcontrolwithspeed(void)
 {  
   tc_pidsetpoint = temp_setpoint;  
-  if( temp1>-500.0 ) tc_pidinput = temp1;
+  if( temp1 > -500.0 ) tc_pidinput = temp1;
   myPID.Compute(); 
 
-  float target_delivery = tc_pidoutput;
+  unsigned long now = millis();
+  float dt = (now - last_delivery_calc_time) / 1000.0f;
+  if (dt <= 0.0f || dt > 1.0f) dt = 0.05f;
+  last_delivery_calc_time = now;
 
-  // Mass-Balance Protection:
-  // 1. Initial 8-second soft-start window: keep delivery capped at 4.0 LPM until return flow starts.
-  if (millis() - wash_speed_start_time < 8000 && flow_lpm1 < 2.0f) {
-    target_delivery = min(target_delivery, 4.0f);
+  // Exponential moving average filter for measured recovery flow (tau = 2.5s)
+  if (flow_rec_smooth <= 0.01f) flow_rec_smooth = flow_lpm1;
+  else flow_rec_smooth += (flow_lpm1 - flow_rec_smooth) * (dt / 2.5f);
+
+  float desired_flow = (float)tc_pidoutput;
+
+  // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
+  // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards PID target.
+  // Do NOT clamp to recovery flow during soft-start to avoid choking circulation transit.
+  bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
+  if (in_softstart || (now - wash_speed_start_time < 15000 && auto_substate != WASH_CYCLE)) {
+    float max_soft_ramp = 4.5f + ((now - wash_speed_start_time) / 1000.0f) * 0.5f;
+    desired_flow = min(desired_flow, max_soft_ramp);
+    delivery_flow_restricted = false;
+    flow_restricted_since = 0;
   } else {
-    // 2. Continuous mass-balance guard: Delivery flow must never be less than 1.0 LPM slower than recovery.
-    // If recovery flow is measured, clamp delivery to: flow_lpm1 - 1.0 LPM (with 3.0 LPM minimum floor).
-    if (flow_lpm1 > 0.5f) {
-      float max_safe_delivery = max(3.0f, flow_lpm1 - 1.0f);
-      if (target_delivery > max_safe_delivery) {
-        target_delivery = max_safe_delivery;
+    // 2. Steady-State Hydraulic Protection (WASH_CYCLE):
+    // If recovery flow is restricted by a dirty filter, cap delivery to (flow_rec_smooth - 0.5 LPM)
+    if (flow_rec_smooth > 1.0f) {
+      float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
+      if (desired_flow > safe_delivery_cap) {
+        desired_flow = safe_delivery_cap;
+        if (!delivery_flow_restricted) {
+          delivery_flow_restricted = true;
+          flow_restricted_since = now;
+        }
+      } else {
+        delivery_flow_restricted = false;
+        flow_restricted_since = 0;
       }
+    } else {
+      delivery_flow_restricted = false;
+      flow_restricted_since = 0;
     }
   }
 
-  // Hard clamp between 3.0 and 8.0 LPM
-  target_delivery = constrain(target_delivery, 3.0f, 8.0f);
+  // Constrain between absolute operating bounds [3.0, 8.5] LPM
+  desired_flow = constrain(desired_flow, 3.0f, 8.5f);
 
-  setpump_lpm(RPUMPD, target_delivery);
+  setpump_lpm(RPUMPD, desired_flow);
 }

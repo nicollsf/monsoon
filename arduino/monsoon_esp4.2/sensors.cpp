@@ -128,9 +128,11 @@ float NTCtemp(int i) { return(i-25); } // temp corresponding to each index
 int NTCRk_len;
 int NTCni = 0;
 float temp1 = -1000.0;
-const float ddpsmax = 0.1;  // maximum degrees per second change for validating measurement
-int temp1_strikes = 0; 
-const int temp1_maxstrikes = 10; // Number of rejections before forcing an update
+
+#define TEMP1_MEDIAN_WINDOW 5
+float temp1_buf[TEMP1_MEDIAN_WINDOW];
+int temp1_buf_count = 0;
+int temp1_buf_idx = 0;
 
 float get_tempsens1()
 {
@@ -139,11 +141,29 @@ float get_tempsens1()
   // Measure ADC voltage and calculate thermistor resistance
   const float Rtkseries = 5.00; // measured precisely as 5.00k
   
-  float aread = analogRead(TSA2PIN);
-  if( aread>=4094 ) return -1000.0; // Prevent divide by zero if sensor open/shorted
+  // Take 9 ADC readings with 500us spacing to reject electrical noise spikes
+  int samples[9];
+  for (int j = 0; j < 9; j++) {
+    samples[j] = analogRead(TSA2PIN);
+    if (j < 8) delayMicroseconds(500);
+  }
+
+  // Insertion sort to find median ADC reading
+  for (int j = 1; j < 9; j++) {
+    int key = samples[j];
+    int k = j - 1;
+    while (k >= 0 && samples[k] > key) {
+      samples[k + 1] = samples[k];
+      k--;
+    }
+    samples[k + 1] = key;
+  }
+
+  int median_adc = samples[4];
+  if (median_adc >= 4094 || median_adc <= 10) return -1000.0; // Prevent divide by zero if sensor open/shorted
 
   // Ratiometric calculation (voltage cancels out)
-  float Rkmeas = (Rtkseries * aread) / (4095.0 - aread);
+  float Rkmeas = (Rtkseries * (float)median_adc) / (4095.0f - (float)median_adc);
 
   // Try locate index i such that NTCRk[i]>=Rmeas>NTCRk[i+1]
   int i = NTCni; // initialise from last
@@ -169,30 +189,39 @@ void setup_tempsens1(void)
   NTCni = 45; // initial search index
   temp1 = -1000.0;
   NTCRk_len = sizeof(NTCRk)/sizeof(float);
+  temp1_buf_count = 0;
+  temp1_buf_idx = 0;
 }
 
 
 void loop_tempsens1(void)
 {
-
   if( millis()-temp1_lastupdate<temp_measureperiod ) return;
+  temp1_lastupdate = millis();
   
   float ttemp = get_tempsens1();
-  unsigned long current_millis = millis();
 
-  // If reading not obviously bad
-  if( ttemp>-500.0 ) {
-    float dtsec = (current_millis - temp1_lastupdate)/1000.0;
+  // If reading not obviously bad (valid range 0°C to 100°C)
+  if( ttemp > 0.0f && ttemp < 100.0f ) {
+    temp1_buf[temp1_buf_idx] = ttemp;
+    temp1_buf_idx = (temp1_buf_idx + 1) % TEMP1_MEDIAN_WINDOW;
+    if( temp1_buf_count < TEMP1_MEDIAN_WINDOW ) temp1_buf_count++;
 
-    if( temp1<-500.0 || abs(ttemp-temp1)/dtsec<ddpsmax || temp1_strikes >= temp1_maxstrikes ) {
-      temp1 = ttemp;
-      temp1_lastupdate = current_millis;
-      temp1_strikes = 0;
-    } else {
-      temp1_strikes++;
+    // Calculate median of rolling window
+    float sorted_buf[TEMP1_MEDIAN_WINDOW];
+    for (int k = 0; k < temp1_buf_count; k++) sorted_buf[k] = temp1_buf[k];
+    for (int j = 1; j < temp1_buf_count; j++) {
+      float key = sorted_buf[j];
+      int k = j - 1;
+      while (k >= 0 && sorted_buf[k] > key) {
+        sorted_buf[k + 1] = sorted_buf[k];
+        k--;
+      }
+      sorted_buf[k + 1] = key;
     }
-  }
 
+    temp1 = sorted_buf[temp1_buf_count / 2];
+  }
 } 
 
 

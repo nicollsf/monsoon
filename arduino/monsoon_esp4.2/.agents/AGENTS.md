@@ -48,6 +48,16 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * **5-Minute Delayed Reopening:** Upon entering `STATE_OFF`, the valve remains closed for 5 minutes (`300,000 ms`) before de-energizing/opening, avoiding unnecessary valve cycles during back-to-back operations.
   * **Manual GUI Control:** Can be manually toggled via `'v'` command at any time.
 
+* **Heaters (Dual Asymmetric Elements - 6 kW Total):**
+  * **Main Heater (`RPHEATER` = 4 on GPIO 13):** **4 kW** geyser element (66.7% power).
+  * **Auxiliary Heater (`RPHEATERA` = 3 on GPIO 4):** **2 kW** kettle element (33.3% power).
+  * **Empirical Thermal Capacity:** $\sim 1\text{ kW}$ per $1\text{ LPM}$ flow ($\text{4 kW} \approx 4\text{--}5\text{ LPM}$, $\text{6 kW} \approx 6\text{--}7\text{ LPM}$).
+  * **Multi-Stage Power Ladder:**
+    * Stage 3 (100% / 6 kW): Main ON, Aux ON (Default full-power operation).
+    * Stage 2 (66% / 4 kW): Main ON, Aux OFF (Moderate filter restriction / lower flow).
+    * Stage 1 (33% / 2 kW): Main OFF, Aux ON (Severe filter restriction / high ambient).
+    * Stage 0 (0% / 0 kW): Main OFF, Aux OFF (Thermal runaway / emergency cutout).
+
 ## 4. Network, Telemetry & Server Architecture
 
 * **Primary Server:** Raspberry Pi at `10.0.0.9` (512GB SSD). Old Pi (`10.0.0.7`) services are permanently disabled.
@@ -84,11 +94,18 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * `FILL_OVERFILL_PUMP`: Calibrated 8.0 LPM flow limit via `setpump_lpm(RPUMPD, 8.0f)` while recovery is OFF.
 * **`STATE_WARM` (Prepare):** Heats to `temp_setpoint + 2.0°C` with low-flow pulsing for mixing and thermal inertia. Does not auto-advance.
 * **`STATE_WASH` (Shower):**
-  * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.0]` LPM.
-  * **Conservative Soft-Start:** Pre-seeded to 4.0 LPM with an 8-second soft-start window (`min(target, 4.0 LPM)` until recovery returns $\ge 2.0\text{ LPM}$).
-  * **Mass-Balance Flow Guard:** Delivery flow is dynamically clamped: $\text{Target Delivery} \le \max(3.0\text{ LPM},\; \text{Flow}_{\text{recovery}} - 1.0\text{ LPM})$.
-  * **Scavenge Target:** Recovery pump targets $\text{Flow}_{\text{delivery}} + 1.0\text{ LPM}$.
-  * **Stabilized Thermal Override:** After 25s post-entry stabilization, if temp $> \text{setpoint} + 1.5^\circ\text{C}$ (e.g. flow clamped due to blocked scavenge), heaters are cut (`ROFF`), re-engaging when temp $\le \text{setpoint} + 0.5^\circ\text{C}$.
+  * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM.
+  * **Rate-Limited Soft-Start:** Starts at 4.5 LPM and ramps up by at most $+0.5\text{ LPM/sec}$ for the first 15 seconds without clamping, allowing pan circulation to establish safely.
+  * **Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + 1.0\text{ LPM}$, overcoming progressive filter fouling.
+  * **Hydraulic Protection (After 15s):** If recovery flow is restricted, delivery is capped at $\text{flow\_rec\_smooth} - 0.5\text{ LPM}$ (floor 3.0 LPM).
+  * **Staged Thermal Override:** If delivery flow is restricted for $\ge 10\text{s}$ and temperature exceeds setpoint:
+    * Temp $> \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Stage 2 (4 kW: Main ON, Aux OFF).
+    * Temp $> \text{setpoint} + 1.8^\circ\text{C} \rightarrow$ Stage 1 (2 kW: Main OFF, Aux ON).
+    * Temp $> \text{setpoint} + 2.5^\circ\text{C} \rightarrow$ Stage 0 (0 kW: Both OFF).
+    * Hysteresis step-up back to Stage 3 (6 kW) when temp $\le \text{setpoint} + 0.3^\circ\text{C}$ or flow restriction clears.
+* **Temperature Sensor Filtering:**
+  * 9-sample ADC median filter in `get_tempsens1()`.
+  * 5-point rolling window median filter on temperature readings.
 
 ## 8. Current Development Focus
 

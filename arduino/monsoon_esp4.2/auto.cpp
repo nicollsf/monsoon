@@ -225,17 +225,40 @@ void loop_autowbleed(void)
 // Auto scavenge control
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
+float auto_scavenge_integral = 0.0f;
 
 void loop_autoscavengecontrol(void)
 {
-  if( !auto_scavengecontrolenable ) return;
-  if( millis()-auto_scavengecontrolstime<250 ) return; // limit update rate
-
-  // We want the scavenge (recovery) pump to run at least 1.0 LPM faster than the delivery pump
-  if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
-  setpump_lpm(RPUMPR, flow_lpm0 + 1.0f);
-  
+  if( !auto_scavengecontrolenable ) {
+    auto_scavenge_integral = 0.0f;
+    return;
+  }
+  if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
   auto_scavengecontrolstime = millis();
+
+  if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
+
+  // Desired recovery flow is actual measured delivery flow + 1.0 LPM (minimum 2.0 LPM floor)
+  float target_rec_lpm = max(2.0f, flow_lpm0 + 1.0f);
+
+  // 1. Feedforward baseline from calibrated model curve
+  float ff_pwm = getpwmFromlpm(target_rec_lpm, modelr);
+
+  // 2. Closed-Loop Feedback Trimming for Filter Resistance:
+  // Only integrate when delivery flow is established (> 1.5 LPM) and state has run > 5s
+  if (flow_lpm0 >= 1.5f && (millis() - auto_statestime > 5000)) {
+    float err = target_rec_lpm - flow_lpm1; // positive if actual recovery is slower than target
+    // Step integral by 0.25% PWM per LPM error per 500ms cycle
+    float delta_i = err * 0.25f;
+    
+    // Anti-windup bounded trim between -15% and +30% PWM
+    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 30.0f);
+  } else {
+    auto_scavenge_integral = 0.0f;
+  }
+
+  float total_pwm = constrain(ff_pwm + auto_scavenge_integral, 0.0f, 100.0f);
+  setpump_perc(RPUMPR, total_pwm);
 }
 
 
@@ -506,12 +529,7 @@ void loop_autowarm(void)
 }
 
 // Auto wash
-enum autowash_states {
-  WASH_NONE = 0,
-  WASH_OVERSCAVENGE,
-  WASH_CYCLE
-};
-const char *autowash_statestrs[] = {"NONE", "OVERSCAV", "CYCLE", "WTF"};
+const char *autowash_statestrs[] = {"NONE", "SOFTSTART", "CYCLE", "WTF"};
 void loop_autowash(void)
 {
   static int last_substate = -1;
@@ -526,24 +544,25 @@ void loop_autowash(void)
     case WASH_NONE:
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
-        // Use PID on flow and bang-bang on heaters to hold temperature.
         temp_controlmode = TCSPEED;
         auto_wtopupenable = 0; // Never enable auto topup during wash
-        // Skip overscavenge to prevent sucking air
       }
-      auto_switchsubstate(WASH_CYCLE);
+      auto_switchsubstate(WASH_SOFTSTART);
       break;
 
-    case WASH_OVERSCAVENGE:
-      // Skipped, but kept in code per request
+    case WASH_SOFTSTART:
       if( just_entered ) {
-        btLog("WASH: Overscavenging pan.");
+        btLog("WASH: Soft-start circulation ramping.");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
-        setpump_perc(RPUMPR, 100); // Clear pan buildup
+        auto_scavengecontrolenable = 1; // Dynamic closed-loop scavenge active
+        temp_controlmode = TCSPEED;
       }
-      if (millis() - auto_substatestime > 5000) {
+
+      // Exit Criteria: Advance to WASH_CYCLE when return flow is established (>= 3.0 LPM for >= 4s) or after 15s timeout
+      if ((flow_lpm1 >= 3.0f && millis() - auto_substatestime >= 4000) || (millis() - auto_substatestime >= 15000)) {
+        btLog("WASH: Soft-start complete (flow1=" + String(flow_lpm1, 1) + " LPM). Entering steady-state WASH_CYCLE.");
         auto_switchsubstate(WASH_CYCLE);
       }
       break;
@@ -553,7 +572,7 @@ void loop_autowash(void)
         btLog("WASH: PID temperature control active.");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
-        auto_scavengecontrolenable = 1; // Now dynamically manage recovery flow
+        auto_scavengecontrolenable = 1; // Keep closed-loop recovery tracking active
       }
       // Accumulate wash stats every second
       static unsigned long last_stat_accum = 0;
@@ -1064,6 +1083,7 @@ void auto_switchsubstate(int substate)
 
   btLog("Entering substate " + String(auto_substatestr));
   auto_substatestime = millis();
+  auto_scavenge_integral = 0.0f;
   rpinsen_reset();
   pumpsen_reset();
   //auto_heaterenable = 0;
@@ -1169,6 +1189,7 @@ void auto_switchstate(int state, String reason)
 
   // Disable auto circuits
   auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
+  auto_scavenge_integral = 0.0f;
   auto_wtopup_interval = 10000; // Reset topup interval to default
 }
 

@@ -39,6 +39,7 @@ extern pumpmodel modelr, modeld;
 pumpmodel pumpcalib_fit(const std::vector<float>& pwms, const std::vector<float>& flows);
 void pumpcalib_savemodels(void);
 void pumpcalib_loadmodels(void);
+float getpwmFromlpm(float targetlpm, pumpmodel m);
 void setpump_lpm(int rpump, float lpm);
 
 // Main loop
