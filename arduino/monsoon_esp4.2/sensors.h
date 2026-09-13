@@ -56,7 +56,7 @@ const int flow_measureperiod = 1000;  // millis
 
 extern int flow_lasts0, flow_lasts1;
 extern unsigned long flow_lastch0, flow_lastch1;
-extern float flow_lpm0, flow_lpm1;
+extern float flow_lpm0, flow_lpm1, flow_lpm1_est;
 extern int flow_lastlt0, flow_lastlt1;
 extern int flow_lastht0, flow_lastht1;
 extern volatile unsigned long total_flow_pulses0, total_flow_pulses1;

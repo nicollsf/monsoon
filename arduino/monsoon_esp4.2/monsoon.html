@@ -561,17 +561,18 @@
           }
           break;
 
-        case 'N': // Flow rates: flow0,flow1
+        case 'N': // Flow rates: flow0,flow1_raw,flow1_est
           const flows = data.split(',');
-          if (flows.length === 2) {
+          if (flows.length >= 2) {
             const flow0 = parseFloat(flows[0]);
-            const flow1 = parseFloat(flows[1]);
-            if (!isNaN(flow0) && !isNaN(flow1)) {
+            const flow1_raw = parseFloat(flows[1]);
+            const flow1_est = (flows.length >= 3) ? parseFloat(flows[2]) : flow1_raw;
+            if (!isNaN(flow0) && !isNaN(flow1_raw)) {
               document.getElementById('flow0-val').innerText = flow0.toFixed(1);
-              document.getElementById('flow1-val').innerText = flow1.toFixed(1);
+              document.getElementById('flow1-val').innerText = (!isNaN(flow1_est) ? flow1_est : flow1_raw).toFixed(1);
               const label = '';
               addChartData(flowChart, label, 0, flow0);
-              addChartData(flowChart, label, 1, flow1);
+              addChartData(flowChart, label, 1, (!isNaN(flow1_est) ? flow1_est : flow1_raw));
             }
           }
           break;

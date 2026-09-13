@@ -104,12 +104,16 @@ def parse_telemetry(payload):
         elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
             updated = True
-        elif tag == 'N': # Flow rates (*N4.2,4.8*)
+        elif tag == 'N': # Flow rates (*N4.2,5.8,4.3*)
             flows = val.split(',')
             if len(flows) >= 1:
                 telemetry_data["flow0"] = flows[0].strip()
             if len(flows) >= 2:
                 telemetry_data["flow1"] = flows[1].strip()
+            if len(flows) >= 3:
+                telemetry_data["flow1_est"] = flows[2].strip()
+            else:
+                telemetry_data["flow1_est"] = telemetry_data["flow1"]
             updated = True
         elif tag == 'F': # Delivery pump speed % (*F85*)
             telemetry_data["pwm0"] = val.strip()

@@ -308,7 +308,7 @@ unsigned long fsvals_period = 1000;
 void report_fsvals()
 {
   String mstr = "*N";
-  mstr += String(flow_lpm0) + "," + String(flow_lpm1);
+  mstr += String(flow_lpm0, 2) + "," + String(flow_lpm1, 2) + "," + String(flow_lpm1_est, 2);
   mstr += "*";
   btSerial.println(mstr);  //Serial.println(mstr);
 

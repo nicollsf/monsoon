@@ -266,7 +266,7 @@ void loop_tempsens(void)
 volatile int flow_cnt0, flow_cnt1;
 volatile unsigned long total_flow_pulses0 = 0, total_flow_pulses1 = 0;
 float flow_rec_scale = 1.0f; // Multiplier to convert raw recovery flow to delivery flow units
-float flow_lpm0, flow_lpm1;
+float flow_lpm0 = 0.0f, flow_lpm1 = 0.0f, flow_lpm1_est = 0.0f;
 unsigned long flow_lastupdate = 0;
 volatile unsigned long last_flow_time0 = 0;
 volatile unsigned long last_flow_time1 = 0;
@@ -414,8 +414,8 @@ void loop_flowsens(void)
   float flfreq0 = (float)flow_cnt0 / flowsens_duration * 1000.0f; // hertz
   flow_lpm0 = 10.0f / 82.0f * flfreq0;
   float flfreq1 = (float)flow_cnt1 / flowsens_duration * 1000.0f;
-  float raw_rec_lpm = 10.0f / 82.0f * flfreq1;
-  flow_lpm1 = get_corrected_recovery_flow(raw_rec_lpm); // Converted directly to delivery flow units
+  flow_lpm1 = 10.0f / 82.0f * flfreq1; // Raw uncalibrated recovery flow (used by control loops)
+  flow_lpm1_est = get_corrected_recovery_flow(flow_lpm1); // Corrected recovery flow in delivery flow units
 
   // Reset and start new measurement
   flow_cnt0 = 0;  flow_cnt1 = 0;
