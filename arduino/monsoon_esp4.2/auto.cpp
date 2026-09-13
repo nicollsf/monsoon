@@ -287,6 +287,8 @@ void loop_autooff(void)
       setrelay_en(RPBALLVALVE, ROFF);
       setrelay(RPBALLVALVE, ROFF);
       btLog("Ball Valve: Reopened after 5 minutes in state OFF.");
+      report_valve_status();
+      report_rpins();
     }
   }
 
@@ -297,7 +299,8 @@ void loop_autooff(void)
       auto_wbleedenable = 1;  // safe pressure when under manual control
       temp_controlmode = TCNONE; // Stop auto-thermostat from overriding manual GUI intent
       htrs_enable = 1;           // Ensure state-machine allows manual heater firing
-      setup_pins();
+      for( int i=0; i<7; i++ ) setrelay(i, ROFF);
+      pumpsen_reset();
       auto_switchsubstate(OFF_RELEASE);
       break;
 
@@ -1129,6 +1132,7 @@ void auto_switchstate(int state, String reason)
   }
 
   // New state persistent store
+  auto_states old_state = auto_state;
   auto_state = (auto_states)state;
   if( auto_state==STATE_WASH ) {
     auto_wtopup_count = 0;
@@ -1157,12 +1161,15 @@ void auto_switchstate(int state, String reason)
 
   rpinsen_reset();
   if (auto_state != STATE_OFF && auto_state != STATE_NONE && auto_state != STATE_CALIBT && auto_state != STATE_CALIBDUMP) {
-    // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT)
+    // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT, CALIBP, CALIBF)
     setrelay_en(RPBALLVALVE, RON);
     setrelay(RPBALLVALVE, RON);
   } else if (auto_state == STATE_OFF) {
-    // Entering state OFF: start the 5-minute timer before reopening the ball valve
-    ball_valve_off_start = millis();
+    if (old_state != STATE_OFF) {
+      // Entering state OFF: start the 5-minute timer before reopening the ball valve
+      ball_valve_off_start = millis();
+      btLog("State OFF: Ball valve will remain closed for 5 minutes before reopening.");
+    }
   } else {
     // Open ball valve for calibration dump / none
     setrelay_en(RPBALLVALVE, ROFF);
