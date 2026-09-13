@@ -260,6 +260,7 @@
     let pingInterval = null;
     const inTopic = "monsoon_inTopic";
     const outTopic = "monsoon_outTopic";
+    let currentShowerState = "";
 
     // Charting Configurations
     const maxDataPoints = 60;
@@ -646,6 +647,7 @@
           break;
 
         case 's': // State and substate
+          currentShowerState = data;
           document.getElementById('state-display').innerText = data;
           document.getElementById('state-display').className = "px-3 py-1 bg-gray-800 border border-gray-700 rounded-md font-semibold text-cyan-400";
           break;
@@ -769,6 +771,11 @@
     function triggerOTAUpdate() {
       if (!mqttClient || !mqttClient.connected) {
         appendLog("<span class='text-red-500'>Cannot update: not connected to broker.</span>");
+        return;
+      }
+      if (currentShowerState && !currentShowerState.toUpperCase().startsWith("OFF")) {
+        appendLog(`<span class='text-amber-400 font-bold'>Cannot apply OTA update while active (${currentShowerState}). Please switch to OFF state first.</span>`);
+        alert(`System is currently active (${currentShowerState}).\n\nPlease switch to STATE_OFF before applying a firmware update.`);
         return;
       }
       isOtaUpdating = true;

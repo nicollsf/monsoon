@@ -72,7 +72,9 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * Runs as a user systemd service (`monsoon-logger.service`) under `nicolls@10.0.0.9`.
   * Logs to `/home/nicolls/monsoon/logs/`.
   * Generates per-shower CSV files with relative `Elapsed_ms` timestamps and token parsing (`*M*` temp, `*N*` flows, `*F*`/`*f*` pump PWM, `*I*` IP, `*r*` RSSI).
-* **OTA Updates:** OTA server on `10.0.0.9/ota/monsoon.json`. Firmware versions are staged via `deploy_ota.py` (wildcard board matching enabled).
+* **OTA Updates & Safety Guard:** 
+  * OTA server on `10.0.0.9/ota/monsoon.json`. Firmware versions are staged via `deploy_ota.py` (wildcard board matching enabled).
+  * **Safety Guard:** OTA updates and flashing are strictly blocked if the system is in an active state (`auto_state != STATE_OFF`) to prevent abrupt de-energization or resets during active heating/showering.
 
 ## 5. Coding Style
 
@@ -92,7 +94,15 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **`STATE_FILL`:**
   * `FILL_PREPARE`: Delivery flow set to 40% with top-up enabled to stabilize flow.
   * `FILL_OVERFILL_PUMP`: Calibrated 8.0 LPM flow limit via `setpump_lpm(RPUMPD, 8.0f)` while recovery is OFF.
-* **`STATE_WARM` (Prepare):** Heats to `temp_setpoint + 2.0°C` with low-flow pulsing for mixing and thermal inertia. Does not auto-advance.
+* **`STATE_WARM` (Two-Stage Preheating Pipeline):**
+  * **`WARM_RAMP` (Fast Heat-Up):**
+    * Continuous forced convection at $\sim 3.5\text{--}3.8\text{ LPM}$ with full $6\text{ kW}$ power (Main 4kW + Aux 2kW).
+    * Delivers a linear heating rate of $\sim +4.9^\circ\text{C/min}$ (reaching setpoint in $\sim 5\text{ min}$ from cold) with zero sensor lag or false thermal trips.
+    * Automatically advances to `WARM_HOLD` when water temperature is within $0.8^\circ\text{C}$ of `temp_setpoint`.
+  * **`WARM_HOLD` (Steady Thermal Soak):**
+    * Continuous low-flow circulation at $\sim 2.2\text{--}2.5\text{ LPM}$.
+    * Dynamically modulates asymmetric heating stages ($0\text{ kW} / 2\text{ kW} / 4\text{ kW} / 6\text{ kW}$) using tight hysteresis around setpoint.
+    * Holds water equilibrium within $\pm 0.5^\circ\text{C}$ indefinitely at $\sim 1.9\text{ kW}$ maintenance power until the user manually triggers `WASH`.
 * **`STATE_WASH` (Shower):**
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM.
   * **Rate-Limited Soft-Start:** Starts at 4.5 LPM and ramps up by at most $+0.5\text{ LPM/sec}$ for the first 15 seconds without clamping, allowing pan circulation to establish safely.
@@ -103,7 +113,8 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Temp $> \text{setpoint} + 1.8^\circ\text{C} \rightarrow$ Stage 1 (2 kW: Main OFF, Aux ON).
     * Temp $> \text{setpoint} + 2.5^\circ\text{C} \rightarrow$ Stage 0 (0 kW: Both OFF).
     * Hysteresis step-up back to Stage 3 (6 kW) when temp $\le \text{setpoint} + 0.3^\circ\text{C}$ or flow restriction clears.
-* **Temperature Sensor Filtering:**
+* **Flow & Temperature Sensor Filtering:**
+  * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.
   * 9-sample ADC median filter in `get_tempsens1()`.
   * 5-point rolling window median filter on temperature readings.
 

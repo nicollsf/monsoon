@@ -1,4 +1,6 @@
 #include "ota.h"
+#include "auto.h"
+#include "control.h"
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include "ESP32OTAPull.h"
@@ -77,6 +79,13 @@ void ota_update()
 {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Skipping OTA update check: WiFi not connected");
+    return;
+  }
+
+  // Safety guard: Never perform OTA while system is actively running heaters or pumps
+  if (auto_state != STATE_OFF) {
+    Serial.printf("OTA Update blocked: System is active (auto_state=%d != STATE_OFF). Aborting.\n", auto_state);
+    mqtt_log("OTA Update blocked: System is active. Transition to OFF before flashing.");
     return;
   }
 

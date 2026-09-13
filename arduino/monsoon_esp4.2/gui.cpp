@@ -80,9 +80,14 @@ void serialcmd(char cmd)
 
   // Force perform OTA update
   if( cmd == 'O' ) {
-    btLog("OTA Update requested via serial command");
-    extern bool ota_pending;
-    ota_pending = true;
+    if( auto_state != STATE_OFF ) {
+      btLog("OTA Update rejected: system is active (must be in STATE_OFF to flash)");
+      mqtt_log("OTA Update rejected: Switch to STATE_OFF before updating.");
+    } else {
+      btLog("OTA Update requested via serial command");
+      extern bool ota_pending;
+      ota_pending = true;
+    }
   }
 
 
