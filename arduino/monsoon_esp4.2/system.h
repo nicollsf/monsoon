@@ -37,7 +37,7 @@ inline int getrelay_en(int rpin) { return RPINS_EN[rpin]; }
 inline void setrelay(int rpin, bool rval) { digitalWrite(RPINS[rpin], rval==ROFF ? RPINS_ROFF[rpin] : !RPINS_ROFF[rpin]); }
 inline int getrelay(int rpin) { return digitalRead(RPINS[rpin])==RPINS_ROFF[rpin] ? ROFF : RON; }
 extern int rpins_reset_cnt;
-inline void rpinsen_reset(void) { for( int i=0; i<7; i++ ) setrelay_en(i, ROFF); rpins_reset_cnt++; }
+inline void rpinsen_reset(void) { for( int i=0; i<8; i++ ) setrelay_en(i, ROFF); rpins_reset_cnt++; }
 
 void setup_pins(void);
 void loop_pins(void);

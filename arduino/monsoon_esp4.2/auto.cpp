@@ -12,7 +12,7 @@
 // ----------------------------------------------------------------------
 
 int auto_double = 1;  // main auto system mode
-const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "RINSE", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "CALIBP", "CALIBT", "CALIBDUMP", "CALIBF", "WTF"};
+const char *auto_statestrs[] = {"NONE", "OFF", "FILL", "SETUP1", "WARM", "WARM1", "WASH", "WASH1", "RINSE", "FLUSHE", "FLUSHR", "PAUSE", "SHUT", "CALIBP", "CALIBT", "CALDUMP", "WTF"};
 auto_states auto_state = STATE_NONE;
 auto_states auto_nextstate = STATE_OFF;
 const char *autonone_statestrs[] = {"NONE", "WTF"};
@@ -287,8 +287,6 @@ void loop_autooff(void)
       setrelay_en(RPBALLVALVE, ROFF);
       setrelay(RPBALLVALVE, ROFF);
       btLog("Ball Valve: Reopened after 5 minutes in state OFF.");
-      report_valve_status();
-      report_rpins();
     }
   }
 
@@ -299,8 +297,7 @@ void loop_autooff(void)
       auto_wbleedenable = 1;  // safe pressure when under manual control
       temp_controlmode = TCNONE; // Stop auto-thermostat from overriding manual GUI intent
       htrs_enable = 1;           // Ensure state-machine allows manual heater firing
-      for( int i=0; i<7; i++ ) setrelay(i, ROFF);
-      pumpsen_reset();
+      setup_pins();
       auto_switchsubstate(OFF_RELEASE);
       break;
 
@@ -1081,20 +1078,15 @@ void loop_auto(void)
 const int eepromaddr0 = 0;  // base offset
 void auto_switchsubstate(int substate)
 {
-  int old_substate = auto_substate;
   auto_substate = substate;
   const char *auto_substatestr = auto_substatestrs[auto_substate];  // handler must set auto_substatestrs
 
   btLog("Entering substate " + String(auto_substatestr));
   auto_substatestime = millis();
-
-  // Don't wipe pump/relay intents when transitioning between active wash running substates
-  if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE)) {
-    auto_scavenge_integral = 0.0f;
-    rpinsen_reset();
-    pumpsen_reset();
-  }
-  
+  auto_scavenge_integral = 0.0f;
+  rpinsen_reset();
+  pumpsen_reset();
+  //auto_heaterenable = 0;
   if( auto_double && auto_state != STATE_OFF ) setrelay_en(RPBURP, RON);
 
   // Call auto with substatechange flag
@@ -1132,7 +1124,6 @@ void auto_switchstate(int state, String reason)
   }
 
   // New state persistent store
-  auto_states old_state = auto_state;
   auto_state = (auto_states)state;
   if( auto_state==STATE_WASH ) {
     auto_wtopup_count = 0;
@@ -1161,15 +1152,12 @@ void auto_switchstate(int state, String reason)
 
   rpinsen_reset();
   if (auto_state != STATE_OFF && auto_state != STATE_NONE && auto_state != STATE_CALIBT && auto_state != STATE_CALIBDUMP) {
-    // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT, CALIBP, CALIBF)
+    // Keep ball valve closed (RON) throughout the active shower session (FILL, WARM, WASH, RINSE, PAUSE, SHUT)
     setrelay_en(RPBALLVALVE, RON);
     setrelay(RPBALLVALVE, RON);
   } else if (auto_state == STATE_OFF) {
-    if (old_state != STATE_OFF) {
-      // Entering state OFF: start the 5-minute timer before reopening the ball valve
-      ball_valve_off_start = millis();
-      btLog("State OFF: Ball valve will remain closed for 5 minutes before reopening.");
-    }
+    // Entering state OFF: start the 5-minute timer before reopening the ball valve
+    ball_valve_off_start = millis();
   } else {
     // Open ball valve for calibration dump / none
     setrelay_en(RPBALLVALVE, ROFF);
@@ -1192,8 +1180,7 @@ void auto_switchstate(int state, String reason)
       setpump_perc(RPUMPR, 100);
       setpump_en(RPUMPR, RON);
       break;
-    case STATE_CALIBDUMP:  auto_nextstate = STATE_CALIBF;  break;
-    case STATE_CALIBF:     auto_nextstate = STATE_OFF;     break;
+    case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;  break;
         
     case STATE_SETUP1:  auto_nextstate = STATE_WARM1;  break;
     case STATE_WARM1:  auto_nextstate = STATE_WASH1;  break;

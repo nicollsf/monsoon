@@ -28,8 +28,7 @@ void setup_pins()
 {
   // Digital outputs for relays
   for( int i=0; i<8; i++ ) pinMode(RPINS[i], OUTPUT);
-  for( int i=0; i<7; i++ ) setrelay(i, ROFF);
-  setrelay(RPBALLVALVE, ROFF);
+  for( int i=0; i<8; i++ ) setrelay(i, ROFF);
   rpinsen_reset();
   rpins_changed = 0;
 

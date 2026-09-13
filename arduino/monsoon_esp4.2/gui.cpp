@@ -162,8 +162,7 @@ void serialcmd(char cmd)
       case STATE_SHUT:  auto_nextstate = STATE_CALIBP;  break;
       case STATE_CALIBP:  auto_nextstate = STATE_CALIBT;  break;
       case STATE_CALIBT:  auto_nextstate = STATE_CALIBDUMP; break;
-      case STATE_CALIBDUMP:  auto_nextstate = STATE_CALIBF;  break;
-      case STATE_CALIBF:     auto_nextstate = STATE_OFF;     break;
+      case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;  break;
       case STATE_SETUP1: auto_nextstate = STATE_WARM1; break;
       case STATE_WARM1:  auto_nextstate = STATE_WASH1; break;
       case STATE_WASH1:  auto_nextstate = STATE_PAUSE; break;
