@@ -58,16 +58,20 @@ const char *ota_errtext(int code)
 	return "Unknown error";
 }
 
+static int last_reported_pct = -1;
+
 void ota_callback(int offset, int totallength)
 {
-	Serial.printf("Updating %d of %d (%02d%%)...\n", offset, totallength, 100 * offset / totallength);
-
-  // Publish current status
-  char temp[512];
-  sprintf(temp, "In ota_callback:  updating %d of %d (%02d%%)...\n", offset, totallength, 100 * offset / totallength);
-  mqtt_log(temp);
+  if (totallength <= 0) return;
+  int pct = (100 * offset) / totallength;
+  if (pct / 10 != last_reported_pct / 10 || pct == 100) {
+    last_reported_pct = pct;
+    Serial.printf("OTA Updating: %d%% (%d / %d bytes)\n", pct, offset, totallength);
+    char temp[128];
+    snprintf(temp, sizeof(temp), "OTA Progress: %d%% (%d / %d bytes)", pct, offset, totallength);
+    mqtt_log(temp);
+  }
 }
-
 
 void ota_update()
 {
@@ -76,17 +80,29 @@ void ota_update()
     return;
   }
 
+  last_reported_pct = -1;
   ESP32OTAPull ota;
   ota.SetCallback(ota_callback);
   ota.AllowDowngrades(true);
 
-  Serial.printf("Checking %s to see if an update is available...\n", OTA_JSON_URL);
-  mqtt_log(String("In ota_update: ") + String("Checking for update at ") + String(OTA_JSON_URL));
+  Serial.printf("Checking %s for firmware update...\n", OTA_JSON_URL);
+  mqtt_log(String("In ota_update: Checking for update at ") + String(OTA_JSON_URL));
 
-	int ret = ota.CheckForOTAUpdate(OTA_JSON_URL, OTA_VERSION);
-  //int ret = ota.CheckForOTAUpdate(OTA_JSON_URL, "0.0.0");  // force update
-	Serial.println("In ota_update:  If the update succeeds the reboot should prevent us ever getting here");
-	Serial.printf("In ota_update:  CheckForOTAUpdate returned %d (%s)\n", ret, ota_errtext(ret));
+  int ret = ota.CheckForOTAUpdate(OTA_JSON_URL, OTA_VERSION);
+  Serial.printf("In ota_update: CheckForOTAUpdate returned %d (%s)\n", ret, ota_errtext(ret));
+  
+  if (ret == ESP32OTAPull::UPDATE_OK || ret == 0) {
+    Serial.println("OTA Update complete! Rebooting ESP32 in 1 second...");
+    mqtt_log("OTA Update complete! Rebooting now...");
+    delay(1000);
+    ESP.restart();
+  } else if (ret > 0) {
+    // An error occurred during download/flash
+    char errBuf[128];
+    snprintf(errBuf, sizeof(errBuf), "OTA Failed with code %d: %s. Re-enabling normal comms.", ret, ota_errtext(ret));
+    Serial.println(errBuf);
+    mqtt_log(errBuf);
+  }
 }
 
 
