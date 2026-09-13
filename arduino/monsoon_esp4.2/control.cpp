@@ -97,7 +97,7 @@ void loop_pumps_and_valves(void)
   // If the tank is full, set safety vetoes for recovery pump and inlet valve.
   // Exception: during scavenge pump calibration, we must keep the scavenge pump running to measure it.
   if (tank_full) {
-    if (auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) {
+    if ((auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) || auto_state == STATE_CALIBF) {
       pump_safety_veto = false;
     } else {
       pump_safety_veto = true;
@@ -255,23 +255,16 @@ void loop_speedcontrol(void)
   analogWrite(SC_PWM0, sc_pwmw[0]);
   analogWrite(SC_PWM1, sc_pwmw[1]);
 
-  // Manage the main pump power relay
-  static bool pumps_were_active = false;
-  static int last_rpins_reset_cnt = 0;
+  // Manage the main pump power relay (hardware gatekeeper for 12V/24V pump supply)
   bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !pump_safety_veto);
   bool d_active = (RPUMP_EN[RPUMPD] == RON && sc_setperc[RPUMPD] > 0.0f);
   bool pumps_active = r_active || d_active;
-                      
-  bool system_was_reset = (rpins_reset_cnt != last_rpins_reset_cnt);
-  last_rpins_reset_cnt = rpins_reset_cnt;
 
-  // Edge-triggering allows manual control to override without constant interference
-  if( (pumps_active && !pumps_were_active) || (pumps_active && system_was_reset) ) {
+  if( pumps_active ) {
     setrelay_en(RPPUMP, RON);
-  } else if( (!pumps_active && pumps_were_active) || (!pumps_active && system_was_reset) ) {
+  } else if( auto_state != STATE_OFF ) {
     setrelay_en(RPPUMP, ROFF);
   }
-  pumps_were_active = pumps_active;
 }
 
 
@@ -576,17 +569,21 @@ void loop_tempcontrolwithspeed(void)
 
   // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
   // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards PID target.
-  // Do NOT clamp to recovery flow during soft-start to avoid choking circulation transit.
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
-  if (in_softstart || (now - wash_speed_start_time < 15000 && auto_substate != WASH_CYCLE)) {
-    float max_soft_ramp = 4.5f + ((now - wash_speed_start_time) / 1000.0f) * 0.5f;
+  if (in_softstart) {
+    float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
     desired_flow = min(desired_flow, max_soft_ramp);
+    flow_rec_smooth = max(flow_rec_smooth, flow_lpm1); // Pre-seed smoothed recovery
     delivery_flow_restricted = false;
     flow_restricted_since = 0;
   } else {
-    // 2. Steady-State Hydraulic Protection (WASH_CYCLE):
-    // If recovery flow is restricted by a dirty filter, cap delivery to (flow_rec_smooth - 0.5 LPM)
-    if (flow_rec_smooth > 1.0f) {
+    // 2. Steady-State Hydraulic Protection:
+    // Only activate after running in WASH_CYCLE for at least 20 seconds (to prevent premature clamping)
+    bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
+    bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 20000)) || 
+                              (!in_wash_cycle && (now - wash_speed_start_time >= 30000));
+
+    if (steady_state_ready && flow_rec_smooth > 1.0f) {
       float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
       if (desired_flow > safe_delivery_cap) {
         desired_flow = safe_delivery_cap;

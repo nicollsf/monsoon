@@ -1,6 +1,7 @@
 #include "sensors.h"
 #include "system.h"
 #include "gui.h"
+#include <Preferences.h>
 
 
 // ----------------------------------------------------------------------
@@ -40,20 +41,32 @@ void update_tank_level_states(void)
 
 void loop_levelsens(void)
 {
-  // Mechanical sensors
-  if( digitalRead(LSPINS[0])==LSPINSlv[0] ) {
-    level_high0 = 0;
-    level_lastlt0 = millis();
-  } else {
-    level_high0 = 1;
-    level_lastht0 = millis();
+  // Mechanical sensors with 300ms software debouncing
+  static int raw_state0 = -1, raw_state1 = -1;
+  static unsigned long raw_change_time0 = 0, raw_change_time1 = 0;
+
+  int current_raw0 = (digitalRead(LSPINS[0]) == LSPINSlv[0]) ? 0 : 1;
+  if (current_raw0 != raw_state0) {
+    raw_state0 = current_raw0;
+    raw_change_time0 = millis();
+  } else if (millis() - raw_change_time0 >= 300) {
+    if (level_high0 != raw_state0) {
+      level_high0 = raw_state0;
+      if (level_high0) level_lastht0 = millis();
+      else level_lastlt0 = millis();
+    }
   }
-  if( digitalRead(LSPINS[1])==LSPINSlv[1] ) {
-    level_high1 = 0;
-    level_lastlt1 = millis();
-  } else {
-    level_high1 = 1;
-    level_lastht1 = millis();
+
+  int current_raw1 = (digitalRead(LSPINS[1]) == LSPINSlv[1]) ? 0 : 1;
+  if (current_raw1 != raw_state1) {
+    raw_state1 = current_raw1;
+    raw_change_time1 = millis();
+  } else if (millis() - raw_change_time1 >= 300) {
+    if (level_high1 != raw_state1) {
+      level_high1 = raw_state1;
+      if (level_high1) level_lastht1 = millis();
+      else level_lastlt1 = millis();
+    }
   }
 
   // Capacitive sensors
@@ -251,6 +264,8 @@ void loop_tempsens(void)
 // ----------------------------------------------------------------------
 
 volatile int flow_cnt0, flow_cnt1;
+volatile unsigned long total_flow_pulses0 = 0, total_flow_pulses1 = 0;
+float flow_rec_scale = 1.0f; // Multiplier to convert raw recovery flow to delivery flow units
 float flow_lpm0, flow_lpm1;
 unsigned long flow_lastupdate = 0;
 volatile unsigned long last_flow_time0 = 0;
@@ -260,6 +275,7 @@ void IRAM_ATTR flowISR0(void) {
   unsigned long now = micros();
   if (now - last_flow_time0 >= 1000) {
     flow_cnt0 = flow_cnt0 + 1;
+    total_flow_pulses0 = total_flow_pulses0 + 1;
     last_flow_time0 = now;
   }
 }
@@ -267,8 +283,14 @@ void IRAM_ATTR flowISR1(void) {
   unsigned long now = micros();
   if (now - last_flow_time1 >= 1000) {
     flow_cnt1 = flow_cnt1 + 1;
+    total_flow_pulses1 = total_flow_pulses1 + 1;
     last_flow_time1 = now;
   }
+}
+
+void flow_reset_total_pulses(void) {
+  total_flow_pulses0 = 0;
+  total_flow_pulses1 = 0;
 }
 
 float flow_thr0, flow_thr1;
@@ -280,10 +302,20 @@ int flow_lastht0, flow_lastht1;  // last high time
 void setup_flowsens(void)
 {
   flow_cnt0 = 0;  flow_cnt1 = 0;
+  total_flow_pulses0 = 0;  total_flow_pulses1 = 0;
   flow_lpm0 = 0;  flow_lpm1 = 0;
   flow_lastupdate = millis();
   attachInterrupt(digitalPinToInterrupt(FSPINS[0]), flowISR0, RISING);
   attachInterrupt(digitalPinToInterrupt(FSPINS[1]), flowISR1, RISING);
+
+  // Load saved K_rec if present
+  Preferences p;
+  p.begin("calibf", true);
+  if (p.isKey("k_rec")) {
+    flow_rec_scale = p.getFloat("k_rec", 1.0f);
+    Serial.printf("Sensors: Loaded calibrated K_rec = %.4f\n", flow_rec_scale);
+  }
+  p.end();
 
   flow_thr0 = flow_thr1 = 1.5;
   flow_lastlt0 = 0;  flow_lastlt1 = 0;
@@ -299,9 +331,9 @@ void loop_flowsens(void)
   // Measurement complete
   unsigned int flowsens_duration = millis() - flow_lastupdate;
   float flfreq0 = (float)flow_cnt0 / flowsens_duration * 1000.0; // hertz
-  flow_lpm0 = 10.0 / 82 * flfreq0;
+  flow_lpm0 = 10.0 / 82.0 * flfreq0;
   float flfreq1 = (float)flow_cnt1 / flowsens_duration * 1000.0;
-  flow_lpm1 = 10.0 / 82 * flfreq1; // 10lpm==82Hz?
+  flow_lpm1 = (10.0 / 82.0 * flfreq1) * flow_rec_scale; // Converted directly to delivery flow units
 
   // Log to serial
   //Serial.printf("FlowSens: C0=%d, C1=%d, Dur=%u ms | Freq0=%.1f Hz, Freq1=%.1f Hz | LPM0=%.2f, LPM1=%.2f\n",

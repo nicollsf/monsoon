@@ -59,6 +59,9 @@ extern unsigned long flow_lastch0, flow_lastch1;
 extern float flow_lpm0, flow_lpm1;
 extern int flow_lastlt0, flow_lastlt1;
 extern int flow_lastht0, flow_lastht1;
+extern volatile unsigned long total_flow_pulses0, total_flow_pulses1;
+extern float flow_rec_scale;
+void flow_reset_total_pulses(void);
 void setup_flowsens(void);
 void loop_flowsens(void);
 
