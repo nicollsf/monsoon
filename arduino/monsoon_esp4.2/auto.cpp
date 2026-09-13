@@ -466,11 +466,8 @@ void loop_autofill(void)
 }
 
 // Auto warm
-enum autowarm_states {
-  WARM_NONE = 0,
-  WARM_PREPARE, // cycle water with heaters on to reach target temp
-};
-const char *autowarm_statestrs[] = {"NONE", "PREPARE", "WTF"};
+// Auto warm
+const char *autowarm_statestrs[] = {"NONE", "RAMP", "HOLD", "WTF"};
 void loop_autowarm(void)
 {
   static int last_substate = -1;
@@ -484,47 +481,90 @@ void loop_autowarm(void)
   switch( auto_substate ) {
     case WARM_NONE:
       if( just_entered ) {
-        btLog("Entering WARM_NONE: Preparing for shower.");
-        // Use bang-bang on heaters to reach and hold target temperature.
-        temp_controlmode = TCHEATER;
+        btLog("Entering WARM: Preparing shower circulation.");
+        temp_controlmode = TCNONE; // loop_autowarm manages staged heaters directly
         auto_wtopupenable = 1; // Keep tank full
         auto_woverflowstopenable = 1; // Pause high-rate recovery when tank is full
+        auto_scavengecontrolenable = 1; // Keep scavenge tracking delivery
       }
-      auto_switchsubstate(WARM_PREPARE);
+      auto_switchsubstate(WARM_RAMP);
       break;
 
-    case WARM_PREPARE: {
+    case WARM_RAMP: {
+      if( just_entered ) {
+        btLog("WARM_RAMP: Fast heat-up with 6 kW at 3.8 LPM. Target: " + String(temp_setpoint, 1) + "C");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_lpm(RPUMPD, 3.8f);
+        auto_scavengecontrolenable = 1;
+        // Engage full 6 kW (Main 4kW + Aux 2kW)
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
+      }
+
+      setrelay_en(RPDELIVER, RON);
+      setpump_en(RPUMPR, RON);
+      setpump_en(RPUMPD, RON);
+      setpump_lpm(RPUMPD, 3.8f);
+
+      // Fast heat-up completion: when within 0.8C of setpoint, advance to WARM_HOLD
+      if (temp1 >= temp_setpoint - 0.8f && (millis() - auto_substatestime > 5000)) {
+        btLog("WARM_RAMP: Target temperature reached (" + String(temp1, 1) + "C). Entering steady WARM_HOLD soak.");
+        auto_switchsubstate(WARM_HOLD);
+      }
+      break;
+    }
+
+    case WARM_HOLD: {
       static bool ready_logged = false;
-      float base_lpm = 0.10f * modeld.maxflow; // Low flow to minimise circuit heat loss
-      float pulse_lpm = 0.70f * modeld.maxflow; // Periodic pulse to guarantee mixing
-      unsigned long cycle_time = (millis() - auto_substatestime) % 30000; // 30s cycle
+      static unsigned long last_stage_eval = 0;
 
       if( just_entered ) {
-        btLog("WARM: Heating and mixing water. Target: " + String(temp_setpoint, 1) + "C");
-        setrelay_en(RPDELIVER, RON);  
-        setpump_en(RPUMPR, RON);  
-        setpump_en(RPUMPD, RON); 
-        setpump_perc(RPUMPR, 100); // Keep recovery pump high to clear pan
+        btLog("WARM_HOLD: Thermal soak at 2.5 LPM. Maintaining " + String(temp_setpoint, 1) + "C.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPR, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_lpm(RPUMPD, 2.5f);
+        auto_scavengecontrolenable = 1;
         ready_logged = false;
+        last_stage_eval = 0;
       }
 
-      // Pulse flow for 5 seconds every 30 seconds for good mixing
-      if( cycle_time < 5000 ) {
-        setpump_lpm(RPUMPD, pulse_lpm);
-      } else {
-        setpump_lpm(RPUMPD, base_lpm);
+      // Maintain continuous mixing flow
+      setrelay_en(RPDELIVER, RON);
+      setpump_en(RPUMPR, RON);
+      setpump_en(RPUMPD, RON);
+      setpump_lpm(RPUMPD, 2.5f);
+
+      // Modulate staged heaters with hysteresis to maintain tight temperature equilibrium
+      if (millis() - last_stage_eval >= 1000) {
+        last_stage_eval = millis();
+
+        if (temp1 < temp_setpoint - 1.2f) {
+          // Stage 3 (6 kW: Main ON, Aux ON)
+          setrelay_en(RPHEATER, RON);
+          setrelay_en(RPHEATERA, RON);
+        } else if (temp1 < temp_setpoint - 0.4f) {
+          // Stage 2 (4 kW: Main ON, Aux OFF)
+          setrelay_en(RPHEATER, RON);
+          setrelay_en(RPHEATERA, ROFF);
+        } else if (temp1 < temp_setpoint + 0.3f) {
+          // Stage 1 (2 kW: Main OFF, Aux ON) - matches environmental heat loss perfectly
+          setrelay_en(RPHEATER, ROFF);
+          setrelay_en(RPHEATERA, RON);
+        } else {
+          // Stage 0 (0 kW: Both OFF)
+          setrelay_en(RPHEATER, ROFF);
+          setrelay_en(RPHEATERA, ROFF);
+        }
       }
 
-      // Once temperature reaches the run setpoint, log it, but only once.
+      // Notify user when ready for wash
       if (temp1 >= temp_setpoint && !ready_logged) {
-        btLog("Shower is ready. Temperature is at target. Advance to WASH state when ready.");
+        btLog("Shower is HOT and READY at " + String(temp1, 1) + "C! Advance to WASH when ready.");
         ready_logged = true;
       }
-
-      // This state does not auto-advance. It holds the temperature until the user
-      // manually advances to STATE_WASH. This provides convenience at the cost of
-      // energy if left in this state for a long time.
-
       break;
     }
   }
@@ -1088,8 +1128,9 @@ void auto_switchsubstate(int substate)
   btLog("Entering substate " + String(auto_substatestr));
   auto_substatestime = millis();
 
-  // Don't wipe pump/relay intents when transitioning between active wash running substates
-  if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE)) {
+  // Don't wipe pump/relay intents when transitioning between active running substates (WASH or WARM)
+  if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE) &&
+      !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD)) {
     auto_scavenge_integral = 0.0f;
     rpinsen_reset();
     pumpsen_reset();
