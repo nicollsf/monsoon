@@ -207,11 +207,11 @@
         </div>
         <!-- Rec Flow -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
-          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Recovery Flow</span>
+          <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Recovery Flow (Est)</span>
           <span id="flow1-val" class="text-3xl font-extrabold text-white">--.-</span>
           <span class="text-gray-400 font-semibold"> LPM</span>
           <div class="mt-1.5 text-[11px] text-gray-500 font-medium">
-            Pump Speed: <span id="pwm1-val" class="text-orange-400 font-bold">--</span>%
+            Raw: <span id="flow1-raw-val" class="text-amber-600/70 font-semibold">--.-</span> LPM | Speed: <span id="pwm1-val" class="text-orange-400 font-bold">--</span>%
           </div>
         </div>
         <!-- Pressure -->
@@ -233,7 +233,7 @@
         </div>
         <!-- Flow Chart -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm">
-          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Flow Rates History</h3>
+          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Flow Rates History (3 Traces)</h3>
           <div class="h-48">
             <canvas id="flowChart"></canvas>
           </div>
@@ -302,18 +302,27 @@
         labels: [],
         datasets: [
           {
-            label: 'Delivery (LPM)',
+            label: 'Delivery',
             data: [],
-            borderColor: '#60a5fa',
+            borderColor: '#38bdf8',
             borderWidth: 2,
             pointRadius: 0,
             fill: false
           },
           {
-            label: 'Recovery (LPM)',
+            label: 'Rec (Raw)',
+            data: [],
+            borderColor: 'rgba(180, 83, 9, 0.5)',
+            borderWidth: 1.5,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            fill: false
+          },
+          {
+            label: 'Rec (Est)',
             data: [],
             borderColor: '#f97316',
-            borderWidth: 2,
+            borderWidth: 2.5,
             pointRadius: 0,
             fill: false
           }
@@ -336,16 +345,22 @@
     });
 
     function addChartData(chart, label, datasetIndex, value) {
-      if (chart.data.labels.length > maxDataPoints) {
-        chart.data.labels.shift();
+      if (datasetIndex === 0) {
+        if (chart.data.labels.length > maxDataPoints) {
+          chart.data.labels.shift();
+        }
+        chart.data.labels.push(label);
       }
-      chart.data.labels.push(label);
       
-      if (chart.data.datasets[datasetIndex].data.length > maxDataPoints) {
-        chart.data.datasets[datasetIndex].data.shift();
+      if (chart.data.datasets[datasetIndex]) {
+        if (chart.data.datasets[datasetIndex].data.length > maxDataPoints) {
+          chart.data.datasets[datasetIndex].data.shift();
+        }
+        chart.data.datasets[datasetIndex].data.push(value);
       }
-      chart.data.datasets[datasetIndex].data.push(value);
-      chart.update('none'); // Update without animation for performance
+      if (datasetIndex === chart.data.datasets.length - 1 || chart.data.datasets.length === 1) {
+        chart.update('none'); // Update without animation for performance
+      }
     }
 
     // Logger
@@ -570,9 +585,13 @@
             if (!isNaN(flow0) && !isNaN(flow1_raw)) {
               document.getElementById('flow0-val').innerText = flow0.toFixed(1);
               document.getElementById('flow1-val').innerText = (!isNaN(flow1_est) ? flow1_est : flow1_raw).toFixed(1);
+              if (document.getElementById('flow1-raw-val')) {
+                document.getElementById('flow1-raw-val').innerText = flow1_raw.toFixed(1);
+              }
               const label = '';
               addChartData(flowChart, label, 0, flow0);
-              addChartData(flowChart, label, 1, (!isNaN(flow1_est) ? flow1_est : flow1_raw));
+              addChartData(flowChart, label, 1, flow1_raw);
+              addChartData(flowChart, label, 2, (!isNaN(flow1_est) ? flow1_est : flow1_raw));
             }
           }
           break;
