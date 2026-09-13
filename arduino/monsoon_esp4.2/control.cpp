@@ -576,17 +576,21 @@ void loop_tempcontrolwithspeed(void)
 
   // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
   // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards PID target.
-  // Do NOT clamp to recovery flow during soft-start to avoid choking circulation transit.
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
-  if (in_softstart || (now - wash_speed_start_time < 15000 && auto_substate != WASH_CYCLE)) {
-    float max_soft_ramp = 4.5f + ((now - wash_speed_start_time) / 1000.0f) * 0.5f;
+  if (in_softstart) {
+    float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
     desired_flow = min(desired_flow, max_soft_ramp);
+    flow_rec_smooth = max(flow_rec_smooth, flow_lpm1); // Pre-seed smoothed recovery
     delivery_flow_restricted = false;
     flow_restricted_since = 0;
   } else {
-    // 2. Steady-State Hydraulic Protection (WASH_CYCLE):
-    // If recovery flow is restricted by a dirty filter, cap delivery to (flow_rec_smooth - 0.5 LPM)
-    if (flow_rec_smooth > 1.0f) {
+    // 2. Steady-State Hydraulic Protection:
+    // Only activate after running in WASH_CYCLE for at least 20 seconds (to prevent premature clamping)
+    bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
+    bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 20000)) || 
+                              (!in_wash_cycle && (now - wash_speed_start_time >= 30000));
+
+    if (steady_state_ready && flow_rec_smooth > 1.0f) {
       float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
       if (desired_flow > safe_delivery_cap) {
         desired_flow = safe_delivery_cap;

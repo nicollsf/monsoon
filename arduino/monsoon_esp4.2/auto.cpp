@@ -1078,15 +1078,20 @@ void loop_auto(void)
 const int eepromaddr0 = 0;  // base offset
 void auto_switchsubstate(int substate)
 {
+  int old_substate = auto_substate;
   auto_substate = substate;
   const char *auto_substatestr = auto_substatestrs[auto_substate];  // handler must set auto_substatestrs
 
   btLog("Entering substate " + String(auto_substatestr));
   auto_substatestime = millis();
-  auto_scavenge_integral = 0.0f;
-  rpinsen_reset();
-  pumpsen_reset();
-  //auto_heaterenable = 0;
+
+  // Don't wipe pump/relay intents when transitioning between active wash running substates
+  if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE)) {
+    auto_scavenge_integral = 0.0f;
+    rpinsen_reset();
+    pumpsen_reset();
+  }
+  
   if( auto_double && auto_state != STATE_OFF ) setrelay_en(RPBURP, RON);
 
   // Call auto with substatechange flag
