@@ -12,8 +12,10 @@ enum autocalibp_states {
 
 enum autocalibf_states {
   CALIBF_NONE = 0,
-  CALIBF_PREPARE,         // Prime circuit at 5.0 delivery / 6.0 recovery
-  CALIBF_RUN,             // Multi-point delivery & delta flow sweep
+  CALIBF_INIT_FILL,       // Fill tank to top float with mains inlet if needed
+  CALIBF_DRAIN_DELIVERY,  // Drain tank from Top Float to Bottom Float using Delivery Pump
+  CALIBF_FILL_RECOVERY,   // Fill tank from Bottom Float to Top Float using Recovery Pump
+  CALIBF_CALCULATE,       // Compute K_rec ratio and display results
   CALIBF_DONE
 };
 

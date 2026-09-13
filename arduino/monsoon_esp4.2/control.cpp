@@ -97,7 +97,7 @@ void loop_pumps_and_valves(void)
   // If the tank is full, set safety vetoes for recovery pump and inlet valve.
   // Exception: during scavenge pump calibration, we must keep the scavenge pump running to measure it.
   if (tank_full) {
-    if (auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) {
+    if ((auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) || auto_state == STATE_CALIBF) {
       pump_safety_veto = false;
     } else {
       pump_safety_veto = true;

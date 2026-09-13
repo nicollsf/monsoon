@@ -508,17 +508,22 @@ void loop_autocalibdump(void)
   }
 }
 
-// Auto calibrate flow balance & level dynamics
-const char *autocalibf_statestrs[] = {"NONE", "PREPARE", "RUN", "DONE", "WTF"};
+// Auto calibrate relative flow between turbine meters (Switch-to-Switch Volumetric Ratio)
+const char *autocalibf_statestrs[] = {"NONE", "INIT_FILL", "DRAIN_DEL", "FILL_REC", "CALC", "DONE", "WTF"};
+
+static int calibf_cycle = 0;
+const int CALIBF_MAX_CYCLES = 3;
+const float calibf_pwms[CALIBF_MAX_CYCLES] = {50.0f, 65.0f, 80.0f};
+
+static unsigned long calibf_del_pulses[CALIBF_MAX_CYCLES];
+static unsigned long calibf_rec_pulses[CALIBF_MAX_CYCLES];
+static unsigned long calibf_del_dur_ms[CALIBF_MAX_CYCLES];
+static unsigned long calibf_rec_dur_ms[CALIBF_MAX_CYCLES];
+
 void loop_autocalibf(void)
 {
   static int last_substate = -1;
-  const float calib_target_flows[] = {4.5f, 6.0f, 7.5f};
-  const float calib_deltas[] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f};
-  const int NUM_FLOWS = sizeof(calib_target_flows) / sizeof(calib_target_flows[0]);
-  const int NUM_DELTAS = sizeof(calib_deltas) / sizeof(calib_deltas[0]);
-  const int TOTAL_STEPS = NUM_FLOWS * NUM_DELTAS; // 15 steps
-  const unsigned long STEP_HOLD_TIME_MS = 25000; // 25s per step
+  extern void mqtt_log(String slog);
 
   if( auto_state != STATE_CALIBF ) return;
   auto_substatestrs = autocalibf_statestrs;
@@ -534,109 +539,173 @@ void loop_autocalibf(void)
         auto_scavengecontrolenable = 0;
         htrs_enable = 0;
         temp_controlmode = TCOFF;
-        btLog("Entering CALIBF_NONE");
-        calib_cind = 0;
+        calibf_cycle = 0;
+        for (int i = 0; i < CALIBF_MAX_CYCLES; i++) {
+          calibf_del_pulses[i] = 0;
+          calibf_rec_pulses[i] = 0;
+          calibf_del_dur_ms[i] = 0;
+          calibf_rec_dur_ms[i] = 0;
+        }
+        btLog("CALIBF: Starting Switch-to-Switch Relative Flow Calibration.");
+        mqtt_log("CALIBF: Starting Switch-to-Switch Relative Flow Calibration (3 speed cycles).");
       }
-      Serial.println("Switching substate to CALIBF_PREPARE");
-      auto_switchsubstate(CALIBF_PREPARE);
-      break;
-
-    case CALIBF_PREPARE:
-      if( just_entered ) {
-        btLog("CALIBF: Priming circuit. Delivery 5.0 LPM, Scavenge 6.0 LPM.");
-        setrelay_en(RPDELIVER, RON);
-        setpump_en(RPUMPR, RON);
-        setpump_en(RPUMPD, RON);
-        setpump_lpm(RPUMPD, 5.0f);
-        setpump_lpm(RPUMPR, 6.0f);
-      }
-
-      // Safeguard: abort if tank is empty
-      if( tank_empty ) {
-        btLog("ERROR: Tank level low during CALIBF prepare. Aborting.");
-        pumpsen_reset();
-        auto_switchstate(STATE_OFF, "Tank empty");
-        return;
-      }
-
-      // Wait 15s to establish solid circuit circulation
-      if( millis() - auto_substatestime >= 15000 ) {
-        btLog("CALIBF: Circuit primed. Starting multi-point flow sweep.");
-        calib_cind = 0;
-        auto_switchsubstate(CALIBF_RUN);
+      if (tank_full) {
+        auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
+      } else {
+        auto_switchsubstate(CALIBF_INIT_FILL);
       }
       break;
 
-    case CALIBF_RUN: {
+    case CALIBF_INIT_FILL:
       if( just_entered ) {
-        calib_cind = 0;
+        btLog("CALIBF: Charging tank with mains inlet to Top Float switch...");
+        mqtt_log("CALIBF: Charging tank to Top Float...");
+        setrelay_en(RPINLET, RON);
+      }
+      if (tank_full) {
+        setrelay_en(RPINLET, ROFF);
+        btLog("CALIBF: Tank full reached. Starting Cycle 1 Drain Phase.");
+        auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
+      }
+      break;
+
+    case CALIBF_DRAIN_DELIVERY: {
+      float current_pwm = calibf_pwms[calibf_cycle];
+      if( just_entered ) {
+        flow_reset_total_pulses();
         calib_lastsettime = millis();
+        setrelay_en(RPINLET, ROFF);
+        setrelay_en(RPDRAIN, ROFF);
         setrelay_en(RPDELIVER, RON);
-        setpump_en(RPUMPR, RON);
+        setpump_en(RPUMPR, ROFF);
+        setpump_perc(RPUMPR, 0);
+        setpump_perc(RPUMPD, current_pwm);
         setpump_en(RPUMPD, RON);
+
+        String msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
+                     "] DRAIN: Running Delivery at " + String(current_pwm, 0) + "% PWM until Bottom Float...";
+        btLog(msg);
+        mqtt_log(msg);
       }
 
-      // Safeguard: abort immediately if tank is empty to prevent pump cavitation/burnout
-      if( tank_empty ) {
-        btLog("ERROR: Tank level low during Flow Calib Step " + String(calib_cind + 1) + ". Aborting.");
-        pumpsen_reset();
-        auto_switchstate(STATE_OFF, "Tank empty cutout");
-        return;
+      // Keep intent energized
+      setrelay_en(RPDELIVER, RON);
+      setpump_perc(RPUMPD, current_pwm);
+      setpump_en(RPUMPD, RON);
+
+      // Must run for at least 5s to leave top float before evaluating bottom float
+      if (millis() - auto_substatestime > 5000 && tank_empty) {
+        unsigned long dur = millis() - calib_lastsettime;
+        unsigned long pulses = total_flow_pulses0;
+        calibf_del_pulses[calibf_cycle] = pulses;
+        calibf_del_dur_ms[calibf_cycle] = dur;
+
+        setpump_en(RPUMPD, ROFF);
+        setpump_perc(RPUMPD, 0);
+
+        String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Delivery Drained: " + 
+                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s.";
+        btLog(doneMsg);
+        mqtt_log(doneMsg);
+
+        auto_switchsubstate(CALIBF_FILL_RECOVERY);
+      }
+      break;
+    }
+
+    case CALIBF_FILL_RECOVERY: {
+      float current_pwm = calibf_pwms[calibf_cycle];
+      if( just_entered ) {
+        flow_reset_total_pulses();
+        calib_lastsettime = millis();
+        setrelay_en(RPDELIVER, RON); // keep deliver circuit open if required
+        setpump_en(RPUMPD, ROFF);
+        setpump_perc(RPUMPD, 0);
+        setpump_perc(RPUMPR, current_pwm);
+        setpump_en(RPUMPR, RON);
+
+        String msg = "CALIBF [Cycle " + String(calibf_cycle + 1) + "/" + String(CALIBF_MAX_CYCLES) + 
+                     "] FILL: Running Recovery at " + String(current_pwm, 0) + "% PWM until Top Float...";
+        btLog(msg);
+        mqtt_log(msg);
       }
 
-      int flow_idx = calib_cind / NUM_DELTAS;
-      int delta_idx = calib_cind % NUM_DELTAS;
-      float target_qd = calib_target_flows[flow_idx];
-      float target_delta = calib_deltas[delta_idx];
-      float target_qr = target_qd + target_delta;
+      // Keep intent energized
+      setpump_perc(RPUMPR, current_pwm);
+      setpump_en(RPUMPR, RON);
 
-      if( just_entered || (calib_cind == 0 && millis() - calib_lastsettime < 50) ) {
-        setpump_lpm(RPUMPD, target_qd);
-        setpump_lpm(RPUMPR, target_qr);
-        String stepMsg = "CALIBF Step " + String(calib_cind + 1) + "/" + String(TOTAL_STEPS) + 
-                         ": QD=" + String(target_qd, 1) + " LPM, Delta=" + String(target_delta, 1) + 
-                         " LPM (QR=" + String(target_qr, 1) + " LPM)";
-        btLog(stepMsg);
-        extern void mqtt_log(String slog);
-        mqtt_log(stepMsg);
-      }
+      // Must run for at least 5s to clear bottom float before checking top float
+      if (millis() - auto_substatestime > 5000 && tank_full) {
+        unsigned long dur = millis() - calib_lastsettime;
+        unsigned long pulses = total_flow_pulses1;
+        calibf_rec_pulses[calibf_cycle] = pulses;
+        calibf_rec_dur_ms[calibf_cycle] = dur;
 
-      if( millis() - calib_lastsettime >= STEP_HOLD_TIME_MS ) {
-        // Step complete - log completion snapshot
-        String stepDone = "CALIBF Step " + String(calib_cind + 1) + " done: flow0=" + String(flow_lpm0, 2) + 
-                          " LPM, flow1=" + String(flow_lpm1, 2) + " LPM, TankFull=" + String(tank_full);
-        btLog(stepDone);
-        extern void mqtt_log(String slog);
-        mqtt_log(stepDone);
+        setpump_en(RPUMPR, ROFF);
+        setpump_perc(RPUMPR, 0);
 
-        calib_cind++;
-        if( calib_cind < TOTAL_STEPS ) {
-          int next_flow_idx = calib_cind / NUM_DELTAS;
-          int next_delta_idx = calib_cind % NUM_DELTAS;
-          float next_qd = calib_target_flows[next_flow_idx];
-          float next_delta = calib_deltas[next_delta_idx];
-          float next_qr = next_qd + next_delta;
+        String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Recovery Filled: " + 
+                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s.";
+        btLog(doneMsg);
+        mqtt_log(doneMsg);
 
-          setpump_lpm(RPUMPD, next_qd);
-          setpump_lpm(RPUMPR, next_qr);
-          calib_lastsettime = millis();
-
-          String nextStepMsg = "CALIBF Step " + String(calib_cind + 1) + "/" + String(TOTAL_STEPS) + 
-                               ": QD=" + String(next_qd, 1) + " LPM, Delta=" + String(next_delta, 1) + 
-                               " LPM (QR=" + String(next_qr, 1) + " LPM)";
-          btLog(nextStepMsg);
-          mqtt_log(nextStepMsg);
+        calibf_cycle++;
+        if (calibf_cycle < CALIBF_MAX_CYCLES) {
+          auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
         } else {
-          auto_switchsubstate(CALIBF_DONE);
+          auto_switchsubstate(CALIBF_CALCULATE);
         }
       }
       break;
     }
 
+    case CALIBF_CALCULATE:
+      if( just_entered ) {
+        pumpsen_reset();
+        unsigned long sum_del_pulses = 0;
+        unsigned long sum_rec_pulses = 0;
+
+        mqtt_log("========================================");
+        mqtt_log("CALIBF RESULTS: Switch-to-Switch Relative Flow");
+        mqtt_log("Cycle | PWM% | Del Pulses | Rec Pulses | K_ratio (Del/Rec)");
+
+        for (int i = 0; i < CALIBF_MAX_CYCLES; i++) {
+          sum_del_pulses += calibf_del_pulses[i];
+          sum_rec_pulses += calibf_rec_pulses[i];
+          float cycle_k = (calibf_rec_pulses[i] > 0) ? ((float)calibf_del_pulses[i] / (float)calibf_rec_pulses[i]) : 1.0f;
+          String row = "  #" + String(i + 1) + "   | " + String(calibf_pwms[i], 0) + "%  | " + 
+                       String(calibf_del_pulses[i]) + "       | " + String(calibf_rec_pulses[i]) + 
+                       "       | " + String(cycle_k, 4);
+          mqtt_log(row);
+        }
+
+        float final_k_rec = 1.0f;
+        if (sum_rec_pulses > 0 && sum_del_pulses > 0) {
+          final_k_rec = (float)sum_del_pulses / (float)sum_rec_pulses;
+        }
+
+        flow_rec_scale = final_k_rec;
+
+        // Persist to NVRAM
+        Preferences p;
+        p.begin("calibf", false);
+        p.putFloat("k_rec", final_k_rec);
+        p.end();
+
+        String summary = "CALIBF FINAL: Recovery Meter Multiplier K_rec = " + String(final_k_rec, 4) + 
+                         " (Saved to NVRAM). Recovery flow now matches Delivery units!";
+        btLog(summary);
+        mqtt_log(summary);
+        mqtt_log("========================================");
+
+        auto_switchsubstate(CALIBF_DONE);
+      }
+      break;
+
     case CALIBF_DONE:
       if( just_entered ) {
         pumpsen_reset();
-        btLog("CALIBF: Flow calibration experiment complete.");
+        btLog("CALIBF: Relative flow calibration complete.");
       }
       auto_switchstate(STATE_OFF, "CALIBF Complete");
       break;
