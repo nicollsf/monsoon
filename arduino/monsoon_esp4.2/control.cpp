@@ -255,23 +255,16 @@ void loop_speedcontrol(void)
   analogWrite(SC_PWM0, sc_pwmw[0]);
   analogWrite(SC_PWM1, sc_pwmw[1]);
 
-  // Manage the main pump power relay
-  static bool pumps_were_active = false;
-  static int last_rpins_reset_cnt = 0;
+  // Manage the main pump power relay (hardware gatekeeper for 12V/24V pump supply)
   bool r_active = (RPUMP_EN[RPUMPR] == RON && sc_setperc[RPUMPR] > 0.0f && !pump_safety_veto);
   bool d_active = (RPUMP_EN[RPUMPD] == RON && sc_setperc[RPUMPD] > 0.0f);
   bool pumps_active = r_active || d_active;
-                      
-  bool system_was_reset = (rpins_reset_cnt != last_rpins_reset_cnt);
-  last_rpins_reset_cnt = rpins_reset_cnt;
 
-  // Edge-triggering allows manual control to override without constant interference
-  if( (pumps_active && !pumps_were_active) || (pumps_active && system_was_reset) ) {
+  if( pumps_active ) {
     setrelay_en(RPPUMP, RON);
-  } else if( (!pumps_active && pumps_were_active) || (!pumps_active && system_was_reset) ) {
+  } else if( auto_state != STATE_OFF ) {
     setrelay_en(RPPUMP, ROFF);
   }
-  pumps_were_active = pumps_active;
 }
 
 

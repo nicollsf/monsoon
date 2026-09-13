@@ -577,6 +577,7 @@ void loop_autocalibf(void)
         setrelay_en(RPINLET, ROFF);
         setrelay_en(RPDRAIN, ROFF);
         setrelay_en(RPDELIVER, RON);
+        setrelay_en(RPPUMP, RON);
         setpump_en(RPUMPR, ROFF);
         setpump_perc(RPUMPR, 0);
         setpump_perc(RPUMPD, current_pwm);
@@ -590,6 +591,7 @@ void loop_autocalibf(void)
 
       // Keep intent energized
       setrelay_en(RPDELIVER, RON);
+      setrelay_en(RPPUMP, RON);
       setpump_perc(RPUMPD, current_pwm);
       setpump_en(RPUMPD, RON);
 
@@ -619,6 +621,7 @@ void loop_autocalibf(void)
         flow_reset_total_pulses();
         calib_lastsettime = millis();
         setrelay_en(RPDELIVER, RON); // keep deliver circuit open if required
+        setrelay_en(RPPUMP, RON);
         setpump_en(RPUMPD, ROFF);
         setpump_perc(RPUMPD, 0);
         setpump_perc(RPUMPR, current_pwm);
@@ -631,6 +634,8 @@ void loop_autocalibf(void)
       }
 
       // Keep intent energized
+      setrelay_en(RPDELIVER, RON);
+      setrelay_en(RPPUMP, RON);
       setpump_perc(RPUMPR, current_pwm);
       setpump_en(RPUMPR, RON);
 
