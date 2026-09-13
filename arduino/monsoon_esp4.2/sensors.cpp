@@ -299,6 +299,96 @@ int flow_lastlt0, flow_lastlt1;  // last low time
 int flow_lastht0, flow_lastht1;  // last high time
 //unsigned long flow_lastch0, flow_lastch1;
 
+int calibf_table_size = 0;
+float calibf_table_raw[CALIBF_MAX_TABLE_PTS];
+float calibf_table_corr[CALIBF_MAX_TABLE_PTS];
+
+float get_corrected_recovery_flow(float raw_rec_lpm) {
+  if (raw_rec_lpm <= 0.05f) return 0.0f;
+  if (calibf_table_size < 2) {
+    // Fallback to single scale factor if no full curve table
+    return raw_rec_lpm * flow_rec_scale;
+  }
+
+  // Below lowest calibrated point: scale linearly using lowest point ratio
+  if (raw_rec_lpm <= calibf_table_raw[0]) {
+    float slope0 = calibf_table_corr[0] / calibf_table_raw[0];
+    return raw_rec_lpm * slope0;
+  }
+
+  // Above highest calibrated point: extrapolate using the slope of the final segment
+  if (raw_rec_lpm >= calibf_table_raw[calibf_table_size - 1]) {
+    int last = calibf_table_size - 1;
+    float slope_last = (calibf_table_corr[last] - calibf_table_corr[last - 1]) / 
+                       (calibf_table_raw[last] - calibf_table_raw[last - 1]);
+    return calibf_table_corr[last] + slope_last * (raw_rec_lpm - calibf_table_raw[last]);
+  }
+
+  // Piecewise linear interpolation between points
+  for (int i = 0; i < calibf_table_size - 1; i++) {
+    if (raw_rec_lpm >= calibf_table_raw[i] && raw_rec_lpm <= calibf_table_raw[i + 1]) {
+      float frac = (raw_rec_lpm - calibf_table_raw[i]) / (calibf_table_raw[i + 1] - calibf_table_raw[i]);
+      return calibf_table_corr[i] + frac * (calibf_table_corr[i + 1] - calibf_table_corr[i]);
+    }
+  }
+
+  return raw_rec_lpm * flow_rec_scale;
+}
+
+void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[]) {
+  if (n_pts < 2 || n_pts > CALIBF_MAX_TABLE_PTS) return;
+
+  Preferences p;
+  p.begin("calibf", false);
+  p.putInt("n_pts", n_pts);
+  for (int i = 0; i < n_pts; i++) {
+    p.putFloat(("r_" + String(i)).c_str(), raw_pts[i]);
+    p.putFloat(("c_" + String(i)).c_str(), corr_pts[i]);
+  }
+  // Store aggregate K for fallback
+  if (raw_pts[n_pts - 1] > 0) {
+    float sum_raw = 0, sum_corr = 0;
+    for (int i = 0; i < n_pts; i++) { sum_raw += raw_pts[i]; sum_corr += corr_pts[i]; }
+    float avg_k = (sum_raw > 0) ? (sum_corr / sum_raw) : 0.7477f;
+    p.putFloat("k_rec", avg_k);
+    flow_rec_scale = avg_k;
+  }
+  p.end();
+
+  calibf_table_size = n_pts;
+  for (int i = 0; i < n_pts; i++) {
+    calibf_table_raw[i] = raw_pts[i];
+    calibf_table_corr[i] = corr_pts[i];
+  }
+  Serial.printf("Sensors: Saved %d-point calibration curve to NVRAM.\n", n_pts);
+}
+
+void load_calibf_table(void) {
+  Preferences p;
+  p.begin("calibf", true);
+  if (p.isKey("n_pts")) {
+    int n = p.getInt("n_pts", 0);
+    if (n >= 2 && n <= CALIBF_MAX_TABLE_PTS) {
+      calibf_table_size = n;
+      for (int i = 0; i < n; i++) {
+        calibf_table_raw[i] = p.getFloat(("r_" + String(i)).c_str(), 0.0f);
+        calibf_table_corr[i] = p.getFloat(("c_" + String(i)).c_str(), 0.0f);
+      }
+      Serial.printf("Sensors: Loaded %d-point calibration curve from NVRAM.\n", calibf_table_size);
+      for (int i = 0; i < calibf_table_size; i++) {
+        Serial.printf("  Point %d: Raw=%.2f LPM -> Corrected=%.2f LPM (K=%.4f)\n", 
+                      i + 1, calibf_table_raw[i], calibf_table_corr[i], 
+                      calibf_table_raw[i] > 0 ? (calibf_table_corr[i] / calibf_table_raw[i]) : 1.0f);
+      }
+    }
+  }
+  if (p.isKey("k_rec")) {
+    flow_rec_scale = p.getFloat("k_rec", 0.7477f);
+    Serial.printf("Sensors: Base K_rec = %.4f\n", flow_rec_scale);
+  }
+  p.end();
+}
+
 void setup_flowsens(void)
 {
   flow_cnt0 = 0;  flow_cnt1 = 0;
@@ -308,20 +398,11 @@ void setup_flowsens(void)
   attachInterrupt(digitalPinToInterrupt(FSPINS[0]), flowISR0, RISING);
   attachInterrupt(digitalPinToInterrupt(FSPINS[1]), flowISR1, RISING);
 
-  // Load saved K_rec if present
-  Preferences p;
-  p.begin("calibf", true);
-  if (p.isKey("k_rec")) {
-    flow_rec_scale = p.getFloat("k_rec", 1.0f);
-    Serial.printf("Sensors: Loaded calibrated K_rec = %.4f\n", flow_rec_scale);
-  }
-  p.end();
+  load_calibf_table();
 
   flow_thr0 = flow_thr1 = 1.5;
   flow_lastlt0 = 0;  flow_lastlt1 = 0;
   flow_lastht0 = 0;  flow_lastht1 = 0;
-//  flow_lasts0 = flow_lasts1 = 0;
-//  flow_lastch0 = flow_lastch1 = flow_lastupdate;
 }
 
 void loop_flowsens(void)
@@ -330,14 +411,11 @@ void loop_flowsens(void)
 
   // Measurement complete
   unsigned int flowsens_duration = millis() - flow_lastupdate;
-  float flfreq0 = (float)flow_cnt0 / flowsens_duration * 1000.0; // hertz
-  flow_lpm0 = 10.0 / 82.0 * flfreq0;
-  float flfreq1 = (float)flow_cnt1 / flowsens_duration * 1000.0;
-  flow_lpm1 = (10.0 / 82.0 * flfreq1) * flow_rec_scale; // Converted directly to delivery flow units
-
-  // Log to serial
-  //Serial.printf("FlowSens: C0=%d, C1=%d, Dur=%u ms | Freq0=%.1f Hz, Freq1=%.1f Hz | LPM0=%.2f, LPM1=%.2f\n",
-  //              flow_cnt0, flow_cnt1, flowsens_duration, flfreq0, flfreq1, flow_lpm0, flow_lpm1);
+  float flfreq0 = (float)flow_cnt0 / flowsens_duration * 1000.0f; // hertz
+  flow_lpm0 = 10.0f / 82.0f * flfreq0;
+  float flfreq1 = (float)flow_cnt1 / flowsens_duration * 1000.0f;
+  float raw_rec_lpm = 10.0f / 82.0f * flfreq1;
+  flow_lpm1 = get_corrected_recovery_flow(raw_rec_lpm); // Converted directly to delivery flow units
 
   // Reset and start new measurement
   flow_cnt0 = 0;  flow_cnt1 = 0;

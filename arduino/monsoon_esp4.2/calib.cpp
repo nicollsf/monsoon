@@ -512,8 +512,8 @@ void loop_autocalibdump(void)
 const char *autocalibf_statestrs[] = {"NONE", "INIT_FILL", "DRAIN_DEL", "FILL_REC", "CALC", "DONE", "WTF"};
 
 static int calibf_cycle = 0;
-const int CALIBF_MAX_CYCLES = 3;
-const float calibf_pwms[CALIBF_MAX_CYCLES] = {50.0f, 65.0f, 80.0f};
+const int CALIBF_MAX_CYCLES = 5;
+const float calibf_pwms[CALIBF_MAX_CYCLES] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f};
 
 static unsigned long calibf_del_pulses[CALIBF_MAX_CYCLES];
 static unsigned long calibf_rec_pulses[CALIBF_MAX_CYCLES];
@@ -546,8 +546,8 @@ void loop_autocalibf(void)
           calibf_del_dur_ms[i] = 0;
           calibf_rec_dur_ms[i] = 0;
         }
-        btLog("CALIBF: Starting Switch-to-Switch Relative Flow Calibration.");
-        mqtt_log("CALIBF: Starting Switch-to-Switch Relative Flow Calibration (3 speed cycles).");
+        btLog("CALIBF: Starting Comprehensive Multi-Point Flow Calibration (5 speeds).");
+        mqtt_log("CALIBF: Starting Comprehensive Multi-Point Flow Calibration (5 speeds: 30%, 40%, 52%, 65%, 80% PWM).");
       }
       if (tank_full) {
         auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
@@ -605,8 +605,10 @@ void loop_autocalibf(void)
         setpump_en(RPUMPD, ROFF);
         setpump_perc(RPUMPD, 0);
 
+        float del_lpm = (10.0f / 82.0f) * ((float)pulses / (dur / 1000.0f));
         String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Delivery Drained: " + 
-                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s.";
+                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (avg " + 
+                         String(del_lpm, 2) + " LPM).";
         btLog(doneMsg);
         mqtt_log(doneMsg);
 
@@ -649,8 +651,15 @@ void loop_autocalibf(void)
         setpump_en(RPUMPR, ROFF);
         setpump_perc(RPUMPR, 0);
 
+        float raw_rec_lpm = (10.0f / 82.0f) * ((float)pulses / (dur / 1000.0f));
+        float k_ratio = (calibf_del_pulses[calibf_cycle] > 0 && pulses > 0) ? 
+                        ((float)calibf_del_pulses[calibf_cycle] / (float)pulses) : 1.0f;
+        float corr_rec_lpm = raw_rec_lpm * k_ratio;
+
         String doneMsg = "CALIBF Cycle " + String(calibf_cycle + 1) + " Recovery Filled: " + 
-                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s.";
+                         String(pulses) + " pulses in " + String(dur / 1000.0f, 1) + "s (raw " + 
+                         String(raw_rec_lpm, 2) + " LPM, corrected " + String(corr_rec_lpm, 2) + 
+                         " LPM, K=" + String(k_ratio, 4) + ").";
         btLog(doneMsg);
         mqtt_log(doneMsg);
 
@@ -667,41 +676,40 @@ void loop_autocalibf(void)
     case CALIBF_CALCULATE:
       if( just_entered ) {
         pumpsen_reset();
-        unsigned long sum_del_pulses = 0;
-        unsigned long sum_rec_pulses = 0;
+        float raw_pts[CALIBF_MAX_CYCLES];
+        float corr_pts[CALIBF_MAX_CYCLES];
 
-        mqtt_log("========================================");
-        mqtt_log("CALIBF RESULTS: Switch-to-Switch Relative Flow");
-        mqtt_log("Cycle | PWM% | Del Pulses | Rec Pulses | K_ratio (Del/Rec)");
+        mqtt_log("================================================================");
+        mqtt_log("CALIBF MULTI-POINT FLOW CALIBRATION TABLE");
+        mqtt_log("Cycle | PWM% | Del LPM | Raw Rec LPM | Corr Rec LPM | K (Del/Rec)");
 
         for (int i = 0; i < CALIBF_MAX_CYCLES; i++) {
-          sum_del_pulses += calibf_del_pulses[i];
-          sum_rec_pulses += calibf_rec_pulses[i];
-          float cycle_k = (calibf_rec_pulses[i] > 0) ? ((float)calibf_del_pulses[i] / (float)calibf_rec_pulses[i]) : 1.0f;
-          String row = "  #" + String(i + 1) + "   | " + String(calibf_pwms[i], 0) + "%  | " + 
-                       String(calibf_del_pulses[i]) + "       | " + String(calibf_rec_pulses[i]) + 
-                       "       | " + String(cycle_k, 4);
+          float del_lpm = (calibf_del_dur_ms[i] > 0) ? 
+                          ((10.0f / 82.0f) * ((float)calibf_del_pulses[i] / (calibf_del_dur_ms[i] / 1000.0f))) : 0.0f;
+          float raw_rec_lpm = (calibf_rec_dur_ms[i] > 0) ? 
+                              ((10.0f / 82.0f) * ((float)calibf_rec_pulses[i] / (calibf_rec_dur_ms[i] / 1000.0f))) : 0.0f;
+          float k_ratio = (calibf_rec_pulses[i] > 0) ? 
+                          ((float)calibf_del_pulses[i] / (float)calibf_rec_pulses[i]) : 1.0f;
+          float corr_rec_lpm = raw_rec_lpm * k_ratio;
+
+          raw_pts[i] = raw_rec_lpm;
+          corr_pts[i] = corr_rec_lpm;
+
+          String row = "  #" + String(i + 1) + "   | " + String(calibf_pwms[i], 0) + "%  |  " + 
+                       String(del_lpm, 2) + "   |    " + String(raw_rec_lpm, 2) + "    |    " + 
+                       String(corr_rec_lpm, 2) + "     |  " + String(k_ratio, 4);
           mqtt_log(row);
+          Serial.println(row);
         }
 
-        float final_k_rec = 1.0f;
-        if (sum_rec_pulses > 0 && sum_del_pulses > 0) {
-          final_k_rec = (float)sum_del_pulses / (float)sum_rec_pulses;
-        }
+        // Save full piecewise-linear calibration curve to NVRAM
+        save_calibf_table(CALIBF_MAX_CYCLES, raw_pts, corr_pts);
 
-        flow_rec_scale = final_k_rec;
-
-        // Persist to NVRAM
-        Preferences p;
-        p.begin("calibf", false);
-        p.putFloat("k_rec", final_k_rec);
-        p.end();
-
-        String summary = "CALIBF FINAL: Recovery Meter Multiplier K_rec = " + String(final_k_rec, 4) + 
-                         " (Saved to NVRAM). Recovery flow now matches Delivery units!";
+        String summary = "CALIBF FINAL: Saved " + String(CALIBF_MAX_CYCLES) + 
+                         "-point piecewise linear curve to NVRAM. Recovery flow is now corrected to Delivery units across all flow rates!";
         btLog(summary);
         mqtt_log(summary);
-        mqtt_log("========================================");
+        mqtt_log("================================================================");
 
         auto_switchsubstate(CALIBF_DONE);
       }
