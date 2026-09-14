@@ -124,10 +124,11 @@ def parse_telemetry(payload):
         elif tag == 'P': # Pressure in kPa (*P120.5*)
             telemetry_data["pressure"] = val.strip()
             updated = True
-        elif tag == 'Q': # Level sensors: empty, full (*Q0100*)
+        elif tag == 'Q': # Level sensors: empty, full (*Q1010*)
             if len(val) >= 2:
-                telemetry_data["tank_empty"] = val[0]
-                telemetry_data["tank_full"] = val[1]
+                # val[0] is '0' when empty (dry), '1' when safe (has water)
+                telemetry_data["tank_empty"] = "1" if val[0] == '0' else "0"
+                telemetry_data["tank_full"] = "1" if val[1] == '1' else "0"
             updated = True
         elif tag == 'v': # Ball valve status (1=closed, 0=open)
             if len(val) >= 1 and val[0] in ('0', '1'):

@@ -222,15 +222,17 @@ void loop_autowbleed(void)
 }
 
 
-// Auto scavenge control
+// Auto scavenge control with dynamic delta ramping
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
 float auto_scavenge_integral = 0.0f;
+float scavenge_delta_lpm = 0.8f;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     auto_scavenge_integral = 0.0f;
+    scavenge_delta_lpm = 0.8f;
     return;
   }
   if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
@@ -238,16 +240,35 @@ void loop_autoscavengecontrol(void)
 
   if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
 
-  // Desired recovery flow is actual measured delivery flow + 1.0 LPM (minimum 2.0 LPM floor)
-  float target_rec_lpm = max(2.0f, flow_lpm0 + 1.0f);
+  unsigned long now = millis();
+
+  // Dynamic Scavenge Delta Ramping:
+  // - When tank is NOT full: steadily increase delta (+0.01 LPM per 500ms / +0.02 LPM/sec = +1.2 LPM/min)
+  //   so the recovery pump progressively ramps up to clear any pooling in the shower pan.
+  // - When tank reaches FULL (top switch triggered): smoothly bump delta down by -0.05 LPM per 500ms
+  //   (floor 0.0 LPM) so recovery matches delivery without chopping or cycling the pump.
+  if (flow_lpm0 >= 1.0f) {
+    if (tank_full) {
+      scavenge_delta_lpm = max(0.0f, scavenge_delta_lpm - 0.05f);
+    } else {
+      scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.01f);
+    }
+  } else {
+    scavenge_delta_lpm = 0.5f;
+  }
+
+  // Desired recovery flow is actual measured delivery flow + dynamic delta (minimum 1.5 LPM floor)
+  float target_rec_lpm = max(1.5f, flow_lpm0 + scavenge_delta_lpm);
 
   // 1. Feedforward baseline from calibrated model curve
   float ff_pwm = getpwmFromlpm(target_rec_lpm, modelr);
 
   // 2. Closed-Loop Feedback Trimming for Filter Resistance:
   // Only integrate when delivery flow is established (> 1.5 LPM) and state has run > 5s
-  if (flow_lpm0 >= 1.5f && (millis() - auto_statestime > 5000)) {
-    float err = target_rec_lpm - flow_lpm1; // positive if actual recovery is slower than target
+  if (flow_lpm0 >= 1.5f && (now - auto_statestime > 5000)) {
+    // Compare target against calibrated recovery flow in delivery flow units (flow_lpm1_est)
+    float actual_rec_lpm = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : flow_lpm1;
+    float err = target_rec_lpm - actual_rec_lpm; // positive if actual recovery is slower than target
     // Step integral by 0.25% PWM per LPM error per 500ms cycle
     float delta_i = err * 0.25f;
     
@@ -484,8 +505,8 @@ void loop_autowarm(void)
         btLog("Entering WARM: Preparing shower circulation.");
         temp_controlmode = TCNONE; // loop_autowarm manages staged heaters directly
         auto_wtopupenable = 1; // Keep tank full
-        auto_woverflowstopenable = 1; // Pause high-rate recovery when tank is full
-        auto_scavengecontrolenable = 1; // Keep scavenge tracking delivery
+        auto_woverflowstopenable = 0; // Use smooth closed-loop scavenge control without hard cycling
+        auto_scavengecontrolenable = 1; // Dynamic recovery delta tracking active
       }
       auto_switchsubstate(WARM_RAMP);
       break;

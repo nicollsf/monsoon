@@ -425,7 +425,7 @@ void loop_tempcontrol(void)
         // - Stage 0 (0kW: Both OFF) if temp1 > temp_setpoint + 2.5°C
         // Re-engage full power as water cools to <= temp_setpoint + 0.3°C or flow restriction clears.
 
-        static int current_power_stage = 3;
+        extern int current_power_stage;
         static unsigned long last_stage_switch_time = 0;
         unsigned long now = millis();
 
@@ -454,7 +454,7 @@ void loop_tempcontrol(void)
         }
 
         // Hysteresis recovery: Step back up to full power if cooled, flow restriction cleared, or during soft-start
-        if (in_softstart || temp1 <= temp_setpoint + 0.3f || !delivery_flow_restricted || (now - wash_speed_start_time <= 20000)) {
+        if (in_softstart || temp1 <= temp_setpoint + 0.5f || !filter_restricted_persistent || (now - wash_speed_start_time <= 20000)) {
           if (current_power_stage < 3 && (now - last_stage_switch_time >= 3000)) {
             current_power_stage = 3;
             last_stage_switch_time = now;
@@ -528,6 +528,7 @@ PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REV
 
 bool delivery_flow_restricted = false;
 unsigned long flow_restricted_since = 0;
+int current_power_stage = 3;
 static float flow_rec_smooth = 0.0f;
 static unsigned long last_delivery_calc_time = 0;
 
@@ -548,6 +549,7 @@ void setup_tempcontrolwithspeed(void)
   flow_rec_smooth = 0.0f;
   delivery_flow_restricted = false;
   flow_restricted_since = 0;
+  current_power_stage = 3;
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -585,7 +587,8 @@ void loop_tempcontrolwithspeed(void)
 
     if (steady_state_ready && flow_rec_smooth > 1.0f) {
       float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
-      if (desired_flow > safe_delivery_cap) {
+      // Restriction flag only applies if recovery is genuinely constrained (< 6.5 LPM)
+      if (desired_flow > safe_delivery_cap && flow_rec_smooth < 6.5f) {
         desired_flow = safe_delivery_cap;
         if (!delivery_flow_restricted) {
           delivery_flow_restricted = true;

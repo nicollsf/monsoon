@@ -105,9 +105,12 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Holds water equilibrium within $\pm 0.5^\circ\text{C}$ indefinitely at $\sim 1.9\text{ kW}$ maintenance power until the user manually triggers `WASH`.
 * **`STATE_WASH` (Shower):**
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM.
-  * **Rate-Limited Soft-Start:** Starts at 4.5 LPM and ramps up by at most $+0.5\text{ LPM/sec}$ for the first 15 seconds without clamping, allowing pan circulation to establish safely.
-  * **Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + 1.0\text{ LPM}$, overcoming progressive filter fouling.
-  * **Hydraulic Protection (After 15s):** If recovery flow is restricted, delivery is capped at $\text{flow\_rec\_smooth} - 0.5\text{ LPM}$ (floor 3.0 LPM).
+  * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
+    * Base delta: $+0.5\text{ LPM}$.
+    * While `!tank_full`: Delta steadily ramps at $+0.02\text{ LPM/sec}$ ($+1.2\text{ LPM/min}$, capped at $+4.5\text{ LPM}$) to progressively clear any pan pooling.
+    * When `tank_full`: Delta smoothly steps down at $-0.10\text{ LPM/sec}$ (floor $0.0\text{ LPM}$) to maintain full-tank equilibrium without pump chopping.
+    * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
+  * **Hydraulic Protection (After 20s in WASH_CYCLE):** If recovery flow is genuinely constrained ($< 6.5\text{ LPM}$), delivery is capped at $\text{flow\_rec\_smooth} - 0.5\text{ LPM}$ (floor 3.0 LPM).
   * **Staged Thermal Override:** If delivery flow is restricted for $\ge 10\text{s}$ and temperature exceeds setpoint:
     * Temp $> \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Stage 2 (4 kW: Main ON, Aux OFF).
     * Temp $> \text{setpoint} + 1.8^\circ\text{C} \rightarrow$ Stage 1 (2 kW: Main OFF, Aux ON).
