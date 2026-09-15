@@ -222,17 +222,17 @@ void loop_autowbleed(void)
 }
 
 
-// Auto scavenge control with dynamic delta ramping
+// Auto scavenge control with dynamic delta ramping in calibrated delivery flow units
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
 float auto_scavenge_integral = 0.0f;
-float scavenge_delta_lpm = 0.8f;
+float scavenge_delta_lpm = 0.5f;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     auto_scavenge_integral = 0.0f;
-    scavenge_delta_lpm = 0.8f;
+    scavenge_delta_lpm = 0.5f;
     return;
   }
   if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
@@ -242,14 +242,14 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // Dynamic Scavenge Delta Ramping:
+  // Dynamic Scavenge Delta in True Delivery Flow Units (LPM):
   // - When tank is NOT full: steadily increase delta (+0.01 LPM per 500ms / +0.02 LPM/sec = +1.2 LPM/min)
   //   so the recovery pump progressively ramps up to clear any pooling in the shower pan.
-  // - When tank reaches FULL (top switch triggered): smoothly bump delta down by -0.05 LPM per 500ms
-  //   (floor 0.0 LPM) so recovery matches delivery without chopping or cycling the pump.
+  // - As soon as tank reaches FULL (top switch triggered): IMMEDIATELY snap delta to 0.0 LPM
+  //   so recovery instantly drops to match delivery flow, holding full-tank equilibrium without overflowing.
   if (flow_lpm0 >= 1.0f) {
     if (tank_full) {
-      scavenge_delta_lpm = max(0.0f, scavenge_delta_lpm - 0.05f);
+      scavenge_delta_lpm = 0.0f; // Immediate snap to match delivery flow
     } else {
       scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.01f);
     }
@@ -257,23 +257,24 @@ void loop_autoscavengecontrol(void)
     scavenge_delta_lpm = 0.5f;
   }
 
-  // Desired recovery flow is actual measured delivery flow + dynamic delta (minimum 1.5 LPM floor)
+  // Desired recovery flow in standardized TRUE delivery units (LPM)
   float target_rec_lpm = max(1.5f, flow_lpm0 + scavenge_delta_lpm);
 
-  // 1. Feedforward baseline from calibrated model curve
-  float ff_pwm = getpwmFromlpm(target_rec_lpm, modelr);
+  // 1. Feedforward baseline: Map true delivery-unit target flow into raw recovery LPM for modelr
+  float target_raw_lpm = get_raw_recovery_flow(target_rec_lpm);
+  float ff_pwm = getpwmFromlpm(target_raw_lpm, modelr);
 
-  // 2. Closed-Loop Feedback Trimming for Filter Resistance:
+  // 2. Closed-Loop Feedback Trimming in standardized Delivery Flow Units:
   // Only integrate when delivery flow is established (> 1.5 LPM) and state has run > 5s
   if (flow_lpm0 >= 1.5f && (now - auto_statestime > 5000)) {
-    // Compare target against calibrated recovery flow in delivery flow units (flow_lpm1_est)
-    float actual_rec_lpm = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : flow_lpm1;
+    // Actual recovery flow in delivery units (flow_lpm1_est)
+    float actual_rec_lpm = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : (flow_lpm1 * flow_rec_scale);
     float err = target_rec_lpm - actual_rec_lpm; // positive if actual recovery is slower than target
-    // Step integral by 0.25% PWM per LPM error per 500ms cycle
-    float delta_i = err * 0.25f;
+    // Step integral by 0.30% PWM per LPM error per 500ms cycle
+    float delta_i = err * 0.30f;
     
-    // Anti-windup bounded trim between -15% and +30% PWM
-    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 30.0f);
+    // Anti-windup bounded trim between -15% and +35% PWM
+    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 35.0f);
   } else {
     auto_scavenge_integral = 0.0f;
   }

@@ -66,6 +66,7 @@ extern int calibf_table_size;
 extern float calibf_table_raw[CALIBF_MAX_TABLE_PTS];
 extern float calibf_table_corr[CALIBF_MAX_TABLE_PTS];
 float get_corrected_recovery_flow(float raw_rec_lpm);
+float get_raw_recovery_flow(float corr_lpm);
 void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[]);
 void load_calibf_table(void);
 void flow_reset_total_pulses(void);

@@ -335,6 +335,37 @@ float get_corrected_recovery_flow(float raw_rec_lpm) {
   return raw_rec_lpm * flow_rec_scale;
 }
 
+float get_raw_recovery_flow(float corr_lpm) {
+  if (corr_lpm <= 0.05f) return 0.0f;
+  if (calibf_table_size < 2) {
+    return flow_rec_scale > 0.01f ? (corr_lpm / flow_rec_scale) : (corr_lpm / 0.7477f);
+  }
+
+  // Below lowest calibrated point
+  if (corr_lpm <= calibf_table_corr[0]) {
+    float slope0 = calibf_table_corr[0] / calibf_table_raw[0];
+    return slope0 > 0.01f ? (corr_lpm / slope0) : (corr_lpm / 0.7477f);
+  }
+
+  // Above highest calibrated point: extrapolate using final segment slope
+  if (corr_lpm >= calibf_table_corr[calibf_table_size - 1]) {
+    int last = calibf_table_size - 1;
+    float slope_last = (calibf_table_corr[last] - calibf_table_corr[last - 1]) / 
+                       (calibf_table_raw[last] - calibf_table_raw[last - 1]);
+    return slope_last > 0.01f ? (calibf_table_raw[last] + (corr_lpm - calibf_table_corr[last]) / slope_last) : (corr_lpm / 0.7477f);
+  }
+
+  // Piecewise linear inverse interpolation between calibrated points
+  for (int i = 0; i < calibf_table_size - 1; i++) {
+    if (corr_lpm >= calibf_table_corr[i] && corr_lpm <= calibf_table_corr[i + 1]) {
+      float frac = (corr_lpm - calibf_table_corr[i]) / (calibf_table_corr[i + 1] - calibf_table_corr[i]);
+      return calibf_table_raw[i] + frac * (calibf_table_raw[i + 1] - calibf_table_raw[i]);
+    }
+  }
+
+  return flow_rec_scale > 0.01f ? (corr_lpm / flow_rec_scale) : (corr_lpm / 0.7477f);
+}
+
 void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[]) {
   if (n_pts < 2 || n_pts > CALIBF_MAX_TABLE_PTS) return;
 

@@ -108,7 +108,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.5\text{ LPM}$.
     * While `!tank_full`: Delta steadily ramps at $+0.02\text{ LPM/sec}$ ($+1.2\text{ LPM/min}$, capped at $+4.5\text{ LPM}$) to progressively clear any pan pooling.
-    * When `tank_full`: Delta smoothly steps down at $-0.10\text{ LPM/sec}$ (floor $0.0\text{ LPM}$) to maintain full-tank equilibrium without pump chopping.
+    * When `tank_full`: Delta immediately snaps to $0.0\text{ LPM}$ to instantly match delivery flow, holding full-tank equilibrium without overflowing or pump chopping.
     * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
   * **Hydraulic Protection (After 20s in WASH_CYCLE):** If recovery flow is genuinely constrained ($< 6.5\text{ LPM}$), delivery is capped at $\text{flow\_rec\_smooth} - 0.5\text{ LPM}$ (floor 3.0 LPM).
   * **Staged Thermal Override:** If delivery flow is restricted for $\ge 10\text{s}$ and temperature exceeds setpoint:
