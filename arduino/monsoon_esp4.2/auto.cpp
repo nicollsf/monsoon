@@ -243,18 +243,18 @@ void loop_autoscavengecontrol(void)
   unsigned long now = millis();
 
   // Dynamic Scavenge Delta in True Delivery Flow Units (LPM):
-  // - When tank is NOT full: steadily increase delta (+0.01 LPM per 500ms / +0.02 LPM/sec = +1.2 LPM/min)
-  //   so the recovery pump progressively ramps up to clear any pooling in the shower pan.
+  // - When tank is NOT full: slowly increase delta (+0.0025 LPM per 500ms / +0.005 LPM/sec = +0.30 LPM/min)
+  //   so the recovery pump gently ramps up without short-period cycling.
   // - As soon as tank reaches FULL (top switch triggered): IMMEDIATELY snap delta to 0.0 LPM
   //   so recovery instantly drops to match delivery flow, holding full-tank equilibrium without overflowing.
   if (flow_lpm0 >= 1.0f) {
     if (tank_full) {
       scavenge_delta_lpm = 0.0f; // Immediate snap to match delivery flow
     } else {
-      scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.01f);
+      scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.0025f);
     }
   } else {
-    scavenge_delta_lpm = 0.5f;
+    scavenge_delta_lpm = 0.2f;
   }
 
   // Desired recovery flow in standardized TRUE delivery units (LPM)
@@ -398,7 +398,7 @@ void loop_autofill(void)
     case FILL_PREPARE:
       if( just_entered ) {
         btLog("FILL: Starting circulation and stabilising flow.");
-        setpump_perc(RPUMPR, 100);
+        auto_scavengecontrolenable = 1;
         setpump_perc(RPUMPD, 40); // DELIVERY ~40%
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPR, RON);
@@ -416,6 +416,7 @@ void loop_autofill(void)
     case FILL_OVERFILL_PUMP:
       if( just_entered ) {
         btLog("FILL: Overfill pump stage. Run " + String(fill_overfill_count + 1) + "/" + String(fill_overfill_target) + ". Target: " + String(fill_overfill_volume_limit, 1) + "L at 8 LPM.");
+        auto_scavengecontrolenable = 0;
         setpump_en(RPUMPR, ROFF);
         auto_wtopupenable = 0;
         setrelay_en(RPINLET, ROFF);
