@@ -512,8 +512,8 @@ void loop_autocalibdump(void)
 const char *autocalibf_statestrs[] = {"NONE", "INIT_FILL", "DRAIN_DEL", "FILL_REC", "CALC", "DONE", "WTF"};
 
 static int calibf_cycle = 0;
-const int CALIBF_MAX_CYCLES = 5;
-const float calibf_pwms[CALIBF_MAX_CYCLES] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f};
+const int CALIBF_MAX_CYCLES = 6;
+const float calibf_pwms[CALIBF_MAX_CYCLES] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f, 95.0f};
 
 static unsigned long calibf_del_pulses[CALIBF_MAX_CYCLES];
 static unsigned long calibf_rec_pulses[CALIBF_MAX_CYCLES];
@@ -546,8 +546,8 @@ void loop_autocalibf(void)
           calibf_del_dur_ms[i] = 0;
           calibf_rec_dur_ms[i] = 0;
         }
-        btLog("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 5 speeds).");
-        mqtt_log("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 5 speeds: 30%, 40%, 52%, 65%, 80% PWM).");
+        btLog("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 6 speeds).");
+        mqtt_log("CALIBF: Starting Multi-Point Flow Calibration (Warmup + 6 speeds: 30%, 40%, 52%, 65%, 80%, 95% PWM).");
       }
       if (tank_full) {
         auto_switchsubstate(CALIBF_DRAIN_DELIVERY);
@@ -672,7 +672,7 @@ void loop_autocalibf(void)
         setpump_perc(RPUMPR, 0);
 
         if (calibf_cycle < 0) {
-          String doneMsg = "CALIBF: Warmup cycle complete (lines de-aerated and primed). Starting official 5-point calibration...";
+          String doneMsg = "CALIBF: Warmup cycle complete (lines de-aerated and primed). Starting official 6-point calibration...";
           btLog(doneMsg);
           mqtt_log(doneMsg);
           calibf_cycle = 0;
