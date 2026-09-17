@@ -219,7 +219,7 @@ def on_message(client, userdata, msg):
                     csv_writer.writerow([
                         "Elapsed_ms", "State", "Substate", 
                         "Temp", "Setpoint", 
-                        "Flow0_Del", "Flow1_Rec", 
+                        "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est",
                         "PWM0", "PWM1", 
                         "Filter_Yield", "Pressure", 
                         "Tank_Empty", "Tank_Full", 
@@ -259,6 +259,7 @@ def on_message(client, userdata, msg):
                         telemetry_data["setpoint"],
                         telemetry_data["flow0"],
                         telemetry_data["flow1"],
+                        telemetry_data.get("flow1_est", telemetry_data["flow1"]),
                         telemetry_data["pwm0"],
                         telemetry_data["pwm1"],
                         filter_yield,
