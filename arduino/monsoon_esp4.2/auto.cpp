@@ -250,11 +250,13 @@ void loop_autoscavengecontrol(void)
   if (flow_lpm0 >= 1.0f) {
     if (tank_full) {
       scavenge_delta_lpm = 0.0f; // Immediate snap to match delivery flow
+      auto_scavenge_integral = 0.0f; // Instantly reset integral to match pure feedforward
     } else {
       scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.0025f);
     }
   } else {
     scavenge_delta_lpm = 0.2f;
+    auto_scavenge_integral = 0.0f;
   }
 
   // Desired recovery flow in standardized TRUE delivery units (LPM)
@@ -273,8 +275,15 @@ void loop_autoscavengecontrol(void)
     // Step integral by 0.30% PWM per LPM error per 500ms cycle
     float delta_i = err * 0.30f;
     
-    // Anti-windup bounded trim between -15% and +35% PWM
-    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 35.0f);
+    // Anti-windup: Only integrate positive error if recovery flow has NOT yet reached delivery flow (flow_lpm0).
+    // If actual recovery is already matching or exceeding delivery flow, the pan is clear and additional delta
+    // is handled purely by feedforward (ff_pwm) without winding up the integral term.
+    if (delta_i > 0.0f && actual_rec_lpm >= flow_lpm0) {
+      delta_i = 0.0f;
+    }
+
+    // Anti-windup bounded trim between -15% and +15% PWM
+    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 15.0f);
   } else {
     auto_scavenge_integral = 0.0f;
   }

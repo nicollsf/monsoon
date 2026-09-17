@@ -585,10 +585,13 @@ void loop_tempcontrolwithspeed(void)
     bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 20000)) || 
                               (!in_wash_cycle && (now - wash_speed_start_time >= 30000));
 
-    if (steady_state_ready && flow_rec_smooth > 1.0f) {
+    // Hydraulic Protection applies ONLY if the recovery pump is saturated/working hard (sc_setperc[RPUMPR] >= 80%)
+    // but recovery flow remains constrained (< 5.5 LPM), indicating a genuinely dirty/restricted filter.
+    bool recovery_saturated = (sc_setperc[RPUMPR] >= 80.0f);
+
+    if (steady_state_ready && recovery_saturated && flow_rec_smooth > 1.0f) {
       float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
-      // Restriction flag only applies if recovery is genuinely constrained (< 6.5 LPM)
-      if (desired_flow > safe_delivery_cap && flow_rec_smooth < 6.5f) {
+      if (desired_flow > safe_delivery_cap && flow_rec_smooth < 5.5f) {
         desired_flow = safe_delivery_cap;
         if (!delivery_flow_restricted) {
           delivery_flow_restricted = true;
