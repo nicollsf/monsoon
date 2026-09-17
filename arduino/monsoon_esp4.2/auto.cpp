@@ -407,7 +407,8 @@ void loop_autofill(void)
     case FILL_PREPARE:
       if( just_entered ) {
         btLog("FILL: Starting circulation and stabilising flow.");
-        auto_scavengecontrolenable = 1;
+        auto_scavengecontrolenable = 0;
+        setpump_perc(RPUMPR, 100);
         setpump_perc(RPUMPD, 40); // DELIVERY ~40%
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPR, RON);
