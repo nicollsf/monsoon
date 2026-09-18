@@ -233,7 +233,7 @@
         </div>
         <!-- Flow Chart -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm">
-          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Flow Rates History (3 Traces)</h3>
+          <h3 class="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Flow Rates History (4 Traces)</h3>
           <div class="h-48">
             <canvas id="flowChart"></canvas>
           </div>
@@ -324,6 +324,15 @@
             data: [],
             borderColor: '#f97316',
             borderWidth: 2.5,
+            pointRadius: 0,
+            fill: false
+          },
+          {
+            label: 'Rec (Target)',
+            data: [],
+            borderColor: '#c084fc',
+            borderWidth: 1.5,
+            borderDash: [4, 4],
             pointRadius: 0,
             fill: false
           }
@@ -577,12 +586,13 @@
           }
           break;
 
-        case 'N': // Flow rates: flow0,flow1_raw,flow1_est
+        case 'N': // Flow rates: flow0,flow1_raw,flow1_est,flow1_target
           const flows = data.split(',');
           if (flows.length >= 2) {
             const flow0 = parseFloat(flows[0]);
             const flow1_raw = parseFloat(flows[1]);
             const flow1_est = (flows.length >= 3) ? parseFloat(flows[2]) : flow1_raw;
+            const flow1_target = (flows.length >= 4) ? parseFloat(flows[3]) : 0.0;
             if (!isNaN(flow0) && !isNaN(flow1_raw)) {
               document.getElementById('flow0-val').innerText = flow0.toFixed(1);
               document.getElementById('flow1-val').innerText = (!isNaN(flow1_est) ? flow1_est : flow1_raw).toFixed(1);
@@ -593,6 +603,7 @@
               addChartData(flowChart, label, 0, flow0);
               addChartData(flowChart, label, 1, flow1_raw);
               addChartData(flowChart, label, 2, (!isNaN(flow1_est) ? flow1_est : flow1_raw));
+              addChartData(flowChart, label, 3, (!isNaN(flow1_target) ? flow1_target : 0.0));
             }
           }
           break;

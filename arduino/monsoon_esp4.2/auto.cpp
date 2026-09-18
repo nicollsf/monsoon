@@ -227,12 +227,15 @@ int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
 float auto_scavenge_integral = 0.0f;
 float scavenge_delta_lpm = 0.5f;
+float auto_scavenge_target_lpm = 0.0f;
+unsigned long scavenge_tank_full_last_time = 0;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     auto_scavenge_integral = 0.0f;
     scavenge_delta_lpm = 0.5f;
+    auto_scavenge_target_lpm = 0.0f;
     return;
   }
   if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
@@ -243,17 +246,20 @@ void loop_autoscavengecontrol(void)
   unsigned long now = millis();
 
   // Dynamic Scavenge Delta in True Delivery Flow Units (LPM):
-  // - When tank is NOT full: slowly increase delta (+0.0025 LPM per 500ms / +0.005 LPM/sec = +0.30 LPM/min)
-  //   so the recovery pump gently ramps up without short-period cycling.
-  // - As soon as tank reaches FULL (top switch triggered): IMMEDIATELY snap delta to 0.0 LPM
-  //   so recovery instantly drops to match delivery flow, holding full-tank equilibrium without overflowing.
-  if (flow_lpm0 >= 1.0f) {
-    if (tank_full) {
-      scavenge_delta_lpm = 0.0f; // Immediate snap to match delivery flow
-      auto_scavenge_integral = 0.0f; // Instantly reset integral to match pure feedforward
-    } else {
-      scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.0025f);
-    }
+  // - When tank reaches FULL: IMMEDIATELY snap delta to 0.0 LPM and reset integral
+  //   so recovery instantly drops to match delivery flow without overflowing.
+  // - Post-Full Cooldown Latch: Hold delta at 0.0 LPM for 25 seconds after tank_full clears
+  //   to prevent hunting/rapid re-triggering of the upper float switch.
+  // - When 25s post-full period has elapsed: gently ramp delta up (+0.0025 LPM per 500ms / +0.005 LPM/sec = +0.30 LPM/min)
+  //   to draw down any excess water in the pan without causing short-period cycling.
+  if (tank_full) {
+    scavenge_tank_full_last_time = now;
+    scavenge_delta_lpm = 0.0f;
+    auto_scavenge_integral = 0.0f;
+  } else if (now - scavenge_tank_full_last_time < 25000) {
+    scavenge_delta_lpm = 0.0f; // 25s stabilization hold
+  } else if (flow_lpm0 >= 1.0f) {
+    scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.0025f);
   } else {
     scavenge_delta_lpm = 0.2f;
     auto_scavenge_integral = 0.0f;
@@ -261,6 +267,7 @@ void loop_autoscavengecontrol(void)
 
   // Desired recovery flow in standardized TRUE delivery units (LPM)
   float target_rec_lpm = max(1.5f, flow_lpm0 + scavenge_delta_lpm);
+  auto_scavenge_target_lpm = target_rec_lpm;
 
   // 1. Feedforward baseline: Map true delivery-unit target flow into raw recovery LPM for modelr
   float target_raw_lpm = get_raw_recovery_flow(target_rec_lpm);

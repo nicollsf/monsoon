@@ -40,6 +40,8 @@ telemetry_data = {
     "setpoint": "0.0",
     "flow0": "0.0",
     "flow1": "0.0",
+    "flow1_est": "0.0",
+    "flow1_target": "0.0",
     "pressure": "0",
     "pwm0": "0",
     "pwm1": "0",
@@ -104,7 +106,7 @@ def parse_telemetry(payload):
         elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
             updated = True
-        elif tag == 'N': # Flow rates (*N4.2,5.8,4.3*)
+        elif tag == 'N': # Flow rates (*N4.2,5.8,4.3,4.5*)
             flows = val.split(',')
             if len(flows) >= 1:
                 telemetry_data["flow0"] = flows[0].strip()
@@ -114,6 +116,10 @@ def parse_telemetry(payload):
                 telemetry_data["flow1_est"] = flows[2].strip()
             else:
                 telemetry_data["flow1_est"] = telemetry_data["flow1"]
+            if len(flows) >= 4:
+                telemetry_data["flow1_target"] = flows[3].strip()
+            else:
+                telemetry_data["flow1_target"] = "0.0"
             updated = True
         elif tag == 'F': # Delivery pump speed % (*F85*)
             telemetry_data["pwm0"] = val.strip()
@@ -219,7 +225,7 @@ def on_message(client, userdata, msg):
                     csv_writer.writerow([
                         "Elapsed_ms", "State", "Substate", 
                         "Temp", "Setpoint", 
-                        "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est",
+                        "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est", "Flow1_Rec_Target",
                         "PWM0", "PWM1", 
                         "Filter_Yield", "Pressure", 
                         "Tank_Empty", "Tank_Full", 
@@ -260,6 +266,7 @@ def on_message(client, userdata, msg):
                         telemetry_data["flow0"],
                         telemetry_data["flow1"],
                         telemetry_data.get("flow1_est", telemetry_data["flow1"]),
+                        telemetry_data.get("flow1_target", "0.0"),
                         telemetry_data["pwm0"],
                         telemetry_data["pwm1"],
                         filter_yield,
