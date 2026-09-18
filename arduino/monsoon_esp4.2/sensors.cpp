@@ -312,23 +312,30 @@ float get_corrected_recovery_flow(float raw_rec_lpm) {
 
   // Below lowest calibrated point: scale linearly using lowest point ratio
   if (raw_rec_lpm <= calibf_table_raw[0]) {
-    float slope0 = calibf_table_corr[0] / calibf_table_raw[0];
-    return raw_rec_lpm * slope0;
+    float slope0 = (calibf_table_raw[0] > 0.1f) ? (calibf_table_corr[0] / calibf_table_raw[0]) : flow_rec_scale;
+    float eff_slope0 = (slope0 > 0.05f && slope0 < 1.5f) ? slope0 : flow_rec_scale;
+    return raw_rec_lpm * eff_slope0;
   }
 
-  // Above highest calibrated point: extrapolate using the slope of the final segment
+  // Above highest calibrated point: extrapolate using valid positive slope or average K
   if (raw_rec_lpm >= calibf_table_raw[calibf_table_size - 1]) {
     int last = calibf_table_size - 1;
-    float slope_last = (calibf_table_corr[last] - calibf_table_corr[last - 1]) / 
-                       (calibf_table_raw[last] - calibf_table_raw[last - 1]);
-    return calibf_table_corr[last] + slope_last * (raw_rec_lpm - calibf_table_raw[last]);
+    float raw_diff = calibf_table_raw[last] - calibf_table_raw[last - 1];
+    float corr_diff = calibf_table_corr[last] - calibf_table_corr[last - 1];
+    float slope_last = (raw_diff > 0.1f && corr_diff > 0.0f) ? (corr_diff / raw_diff) : flow_rec_scale;
+    float eff_slope = (slope_last > 0.2f && slope_last < 1.5f) ? slope_last : flow_rec_scale;
+    return calibf_table_corr[last] + eff_slope * (raw_rec_lpm - calibf_table_raw[last]);
   }
 
   // Piecewise linear interpolation between points
   for (int i = 0; i < calibf_table_size - 1; i++) {
     if (raw_rec_lpm >= calibf_table_raw[i] && raw_rec_lpm <= calibf_table_raw[i + 1]) {
-      float frac = (raw_rec_lpm - calibf_table_raw[i]) / (calibf_table_raw[i + 1] - calibf_table_raw[i]);
-      return calibf_table_corr[i] + frac * (calibf_table_corr[i + 1] - calibf_table_corr[i]);
+      float raw_span = calibf_table_raw[i + 1] - calibf_table_raw[i];
+      if (raw_span > 0.01f) {
+        float frac = (raw_rec_lpm - calibf_table_raw[i]) / raw_span;
+        return calibf_table_corr[i] + frac * (calibf_table_corr[i + 1] - calibf_table_corr[i]);
+      }
+      return calibf_table_corr[i];
     }
   }
 
@@ -343,23 +350,30 @@ float get_raw_recovery_flow(float corr_lpm) {
 
   // Below lowest calibrated point
   if (corr_lpm <= calibf_table_corr[0]) {
-    float slope0 = calibf_table_corr[0] / calibf_table_raw[0];
-    return slope0 > 0.01f ? (corr_lpm / slope0) : (corr_lpm / 0.7477f);
+    float slope0 = (calibf_table_raw[0] > 0.1f) ? (calibf_table_corr[0] / calibf_table_raw[0]) : flow_rec_scale;
+    float eff_slope0 = (slope0 > 0.05f && slope0 < 1.5f) ? slope0 : flow_rec_scale;
+    return corr_lpm / eff_slope0;
   }
 
-  // Above highest calibrated point: extrapolate using final segment slope
+  // Above highest calibrated point: extrapolate using valid positive slope or average K
   if (corr_lpm >= calibf_table_corr[calibf_table_size - 1]) {
     int last = calibf_table_size - 1;
-    float slope_last = (calibf_table_corr[last] - calibf_table_corr[last - 1]) / 
-                       (calibf_table_raw[last] - calibf_table_raw[last - 1]);
-    return slope_last > 0.01f ? (calibf_table_raw[last] + (corr_lpm - calibf_table_corr[last]) / slope_last) : (corr_lpm / 0.7477f);
+    float raw_diff = calibf_table_raw[last] - calibf_table_raw[last - 1];
+    float corr_diff = calibf_table_corr[last] - calibf_table_corr[last - 1];
+    float slope_last = (raw_diff > 0.1f && corr_diff > 0.0f) ? (corr_diff / raw_diff) : flow_rec_scale;
+    float eff_slope = (slope_last > 0.2f && slope_last < 1.5f) ? slope_last : flow_rec_scale;
+    return calibf_table_raw[last] + (corr_lpm - calibf_table_corr[last]) / eff_slope;
   }
 
   // Piecewise linear inverse interpolation between calibrated points
   for (int i = 0; i < calibf_table_size - 1; i++) {
     if (corr_lpm >= calibf_table_corr[i] && corr_lpm <= calibf_table_corr[i + 1]) {
-      float frac = (corr_lpm - calibf_table_corr[i]) / (calibf_table_corr[i + 1] - calibf_table_corr[i]);
-      return calibf_table_raw[i] + frac * (calibf_table_raw[i + 1] - calibf_table_raw[i]);
+      float corr_span = calibf_table_corr[i + 1] - calibf_table_corr[i];
+      if (corr_span > 0.01f) {
+        float frac = (corr_lpm - calibf_table_corr[i]) / corr_span;
+        return calibf_table_raw[i] + frac * (calibf_table_raw[i + 1] - calibf_table_raw[i]);
+      }
+      return calibf_table_raw[i];
     }
   }
 
@@ -369,29 +383,43 @@ float get_raw_recovery_flow(float corr_lpm) {
 void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[]) {
   if (n_pts < 2 || n_pts > CALIBF_MAX_TABLE_PTS) return;
 
+  // Enforce strictly monotonic increasing points
+  float clean_raw[CALIBF_MAX_TABLE_PTS];
+  float clean_corr[CALIBF_MAX_TABLE_PTS];
+  int clean_n = 0;
+  for (int i = 0; i < n_pts && clean_n < CALIBF_MAX_TABLE_PTS; i++) {
+    if (raw_pts[i] > 0.5f && corr_pts[i] > 0.5f) {
+      if (clean_n == 0 || (raw_pts[i] > clean_raw[clean_n - 1] + 0.1f && corr_pts[i] > clean_corr[clean_n - 1])) {
+        clean_raw[clean_n] = raw_pts[i];
+        clean_corr[clean_n] = corr_pts[i];
+        clean_n++;
+      }
+    }
+  }
+
+  if (clean_n < 2) return;
+
   Preferences p;
   p.begin("calibf", false);
-  p.putInt("n_pts", n_pts);
-  for (int i = 0; i < n_pts; i++) {
-    p.putFloat(("r_" + String(i)).c_str(), raw_pts[i]);
-    p.putFloat(("c_" + String(i)).c_str(), corr_pts[i]);
+  p.putInt("n_pts", clean_n);
+  for (int i = 0; i < clean_n; i++) {
+    p.putFloat(("r_" + String(i)).c_str(), clean_raw[i]);
+    p.putFloat(("c_" + String(i)).c_str(), clean_corr[i]);
   }
   // Store aggregate K for fallback
-  if (raw_pts[n_pts - 1] > 0) {
-    float sum_raw = 0, sum_corr = 0;
-    for (int i = 0; i < n_pts; i++) { sum_raw += raw_pts[i]; sum_corr += corr_pts[i]; }
-    float avg_k = (sum_raw > 0) ? (sum_corr / sum_raw) : 0.7477f;
-    p.putFloat("k_rec", avg_k);
-    flow_rec_scale = avg_k;
-  }
+  float sum_raw = 0, sum_corr = 0;
+  for (int i = 0; i < clean_n; i++) { sum_raw += clean_raw[i]; sum_corr += clean_corr[i]; }
+  float avg_k = (sum_raw > 0) ? (sum_corr / sum_raw) : 0.7477f;
+  p.putFloat("k_rec", avg_k);
+  flow_rec_scale = avg_k;
   p.end();
 
-  calibf_table_size = n_pts;
-  for (int i = 0; i < n_pts; i++) {
-    calibf_table_raw[i] = raw_pts[i];
-    calibf_table_corr[i] = corr_pts[i];
+  calibf_table_size = clean_n;
+  for (int i = 0; i < clean_n; i++) {
+    calibf_table_raw[i] = clean_raw[i];
+    calibf_table_corr[i] = clean_corr[i];
   }
-  Serial.printf("Sensors: Saved %d-point calibration curve to NVRAM.\n", n_pts);
+  Serial.printf("Sensors: Saved %d-point strictly monotonic calibration curve to NVRAM (avg K=%.4f).\n", clean_n, avg_k);
 }
 
 void load_calibf_table(void) {
@@ -400,24 +428,55 @@ void load_calibf_table(void) {
   if (p.isKey("n_pts")) {
     int n = p.getInt("n_pts", 0);
     if (n >= 2 && n <= CALIBF_MAX_TABLE_PTS) {
-      calibf_table_size = n;
+      float clean_raw[CALIBF_MAX_TABLE_PTS];
+      float clean_corr[CALIBF_MAX_TABLE_PTS];
+      int clean_n = 0;
       for (int i = 0; i < n; i++) {
-        calibf_table_raw[i] = p.getFloat(("r_" + String(i)).c_str(), 0.0f);
-        calibf_table_corr[i] = p.getFloat(("c_" + String(i)).c_str(), 0.0f);
+        float r = p.getFloat(("r_" + String(i)).c_str(), 0.0f);
+        float c = p.getFloat(("c_" + String(i)).c_str(), 0.0f);
+        if (r > 0.5f && c > 0.5f) {
+          if (clean_n == 0 || (r > clean_raw[clean_n - 1] + 0.1f && c > clean_corr[clean_n - 1])) {
+            clean_raw[clean_n] = r;
+            clean_corr[clean_n] = c;
+            clean_n++;
+          }
+        }
       }
-      Serial.printf("Sensors: Loaded %d-point calibration curve from NVRAM.\n", calibf_table_size);
-      for (int i = 0; i < calibf_table_size; i++) {
-        Serial.printf("  Point %d: Raw=%.2f LPM -> Corrected=%.2f LPM (K=%.4f)\n", 
-                      i + 1, calibf_table_raw[i], calibf_table_corr[i], 
-                      calibf_table_raw[i] > 0 ? (calibf_table_corr[i] / calibf_table_raw[i]) : 1.0f);
+      if (clean_n >= 2) {
+        calibf_table_size = clean_n;
+        for (int i = 0; i < clean_n; i++) {
+          calibf_table_raw[i] = clean_raw[i];
+          calibf_table_corr[i] = clean_corr[i];
+        }
+        Serial.printf("Sensors: Loaded %d-point sanitized monotonic calibration curve from NVRAM.\n", calibf_table_size);
+        for (int i = 0; i < calibf_table_size; i++) {
+          Serial.printf("  Point %d: Raw=%.2f LPM -> Corrected=%.2f LPM (K=%.4f)\n", 
+                        i + 1, calibf_table_raw[i], calibf_table_corr[i], 
+                        calibf_table_raw[i] > 0 ? (calibf_table_corr[i] / calibf_table_raw[i]) : 1.0f);
+        }
       }
     }
   }
   if (p.isKey("k_rec")) {
-    flow_rec_scale = p.getFloat("k_rec", 0.7477f);
-    Serial.printf("Sensors: Base K_rec = %.4f\n", flow_rec_scale);
+    float k = p.getFloat("k_rec", 0.7477f);
+    if (k > 0.4f && k < 1.5f) {
+      flow_rec_scale = k;
+      Serial.printf("Sensors: Base K_rec = %.4f\n", flow_rec_scale);
+    }
   }
   p.end();
+
+  // If table is still empty or invalid, seed with standard monotonic calibration curve
+  if (calibf_table_size < 2) {
+    calibf_table_size = 5;
+    calibf_table_raw[0] = 3.24f; calibf_table_corr[0] = 2.82f;
+    calibf_table_raw[1] = 4.62f; calibf_table_corr[1] = 3.60f;
+    calibf_table_raw[2] = 5.87f; calibf_table_corr[2] = 4.42f;
+    calibf_table_raw[3] = 6.51f; calibf_table_corr[3] = 4.83f;
+    calibf_table_raw[4] = 6.65f; calibf_table_corr[4] = 5.14f;
+    flow_rec_scale = 0.767f;
+    Serial.println("Sensors: Initialized default monotonic 5-point calibration table.");
+  }
 }
 
 void setup_flowsens(void)
