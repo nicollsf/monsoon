@@ -730,8 +730,8 @@ void loop_autocalibf(void)
           Serial.println(row);
         }
 
-        // Save full piecewise-linear calibration curve to NVRAM
-        save_calibf_table(CALIBF_MAX_CYCLES, raw_pts, corr_pts);
+        // Save full piecewise-linear calibration curve and direct PWM lookup to NVRAM
+        save_calibf_table(CALIBF_MAX_CYCLES, raw_pts, corr_pts, calibf_pwms);
 
         String summary = "CALIBF FINAL: Saved " + String(CALIBF_MAX_CYCLES) + 
                          "-point piecewise linear curve to NVRAM. Recovery flow is now corrected to Delivery units across all flow rates!";

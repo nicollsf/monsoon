@@ -255,7 +255,7 @@ void loop_autoscavengecontrol(void)
   if (tank_full) {
     scavenge_tank_full_last_time = now;
     scavenge_delta_lpm = 0.0f;
-    auto_scavenge_integral = 0.0f;
+    if (auto_scavenge_integral > 0.0f) auto_scavenge_integral = 0.0f;
   } else if (now - scavenge_tank_full_last_time < 25000) {
     scavenge_delta_lpm = 0.0f; // 25s stabilization hold
   } else if (flow_lpm0 >= 1.0f) {
@@ -269,9 +269,8 @@ void loop_autoscavengecontrol(void)
   float target_rec_lpm = max(1.5f, flow_lpm0 + scavenge_delta_lpm);
   auto_scavenge_target_lpm = target_rec_lpm;
 
-  // 1. Feedforward baseline: Map true delivery-unit target flow into raw recovery LPM for modelr
-  float target_raw_lpm = get_raw_recovery_flow(target_rec_lpm);
-  float ff_pwm = getpwmFromlpm(target_raw_lpm, modelr);
+  // 1. Feedforward baseline: Direct calibrated recovery PWM lookup from true delivery-unit target flow
+  float ff_pwm = get_recovery_pwm_from_flow(target_rec_lpm);
 
   // 2. Closed-Loop Feedback Trimming in standardized Delivery Flow Units:
   // Only integrate when delivery flow is established (> 1.5 LPM) and state has run > 5s
@@ -543,11 +542,6 @@ void loop_autowarm(void)
         setrelay_en(RPHEATERA, RON);
       }
 
-      setrelay_en(RPDELIVER, RON);
-      setpump_en(RPUMPR, RON);
-      setpump_en(RPUMPD, RON);
-      setpump_lpm(RPUMPD, 3.8f);
-
       // Fast heat-up completion: when within 0.8C of setpoint, advance to WARM_HOLD
       if (temp1 >= temp_setpoint - 0.8f && (millis() - auto_substatestime > 5000)) {
         btLog("WARM_RAMP: Target temperature reached (" + String(temp1, 1) + "C). Entering steady WARM_HOLD soak.");
@@ -570,12 +564,6 @@ void loop_autowarm(void)
         ready_logged = false;
         last_stage_eval = 0;
       }
-
-      // Maintain continuous mixing flow
-      setrelay_en(RPDELIVER, RON);
-      setpump_en(RPUMPR, RON);
-      setpump_en(RPUMPD, RON);
-      setpump_lpm(RPUMPD, 2.5f);
 
       // Modulate staged heaters with hysteresis to maintain tight temperature equilibrium
       if (millis() - last_stage_eval >= 1000) {

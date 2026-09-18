@@ -1,4 +1,5 @@
 #include "sensors.h"
+#include "control.h"
 #include "system.h"
 #include "gui.h"
 #include <Preferences.h>
@@ -302,6 +303,7 @@ int flow_lastht0, flow_lastht1;  // last high time
 int calibf_table_size = 0;
 float calibf_table_raw[CALIBF_MAX_TABLE_PTS];
 float calibf_table_corr[CALIBF_MAX_TABLE_PTS];
+float calibf_table_pwm[CALIBF_MAX_TABLE_PTS] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f, 95.0f};
 
 float get_corrected_recovery_flow(float raw_rec_lpm) {
   if (raw_rec_lpm <= 0.05f) return 0.0f;
@@ -380,18 +382,59 @@ float get_raw_recovery_flow(float corr_lpm) {
   return flow_rec_scale > 0.01f ? (corr_lpm / flow_rec_scale) : (corr_lpm / 0.7477f);
 }
 
-void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[]) {
+float get_recovery_pwm_from_flow(float corr_lpm) {
+  if (corr_lpm <= 0.05f) return 0.0f;
+  if (calibf_table_size < 2) {
+    float raw = get_raw_recovery_flow(corr_lpm);
+    return getpwmFromlpm(raw, modelr);
+  }
+
+  // Below lowest calibrated point: scale linearly from 0 to point 0
+  if (corr_lpm <= calibf_table_corr[0]) {
+    float slope0 = (calibf_table_corr[0] > 0.1f) ? (calibf_table_pwm[0] / calibf_table_corr[0]) : 10.0f;
+    return constrain(corr_lpm * slope0, 0.0f, 100.0f);
+  }
+
+  // Above highest calibrated point: extrapolate using slope between last 2 points
+  if (corr_lpm >= calibf_table_corr[calibf_table_size - 1]) {
+    int last = calibf_table_size - 1;
+    float corr_diff = calibf_table_corr[last] - calibf_table_corr[last - 1];
+    float pwm_diff = calibf_table_pwm[last] - calibf_table_pwm[last - 1];
+    float slope_last = (corr_diff > 0.05f) ? (pwm_diff / corr_diff) : 10.0f;
+    return constrain(calibf_table_pwm[last] + slope_last * (corr_lpm - calibf_table_corr[last]), 0.0f, 100.0f);
+  }
+
+  // Piecewise linear interpolation between calibrated points
+  for (int i = 0; i < calibf_table_size - 1; i++) {
+    if (corr_lpm >= calibf_table_corr[i] && corr_lpm <= calibf_table_corr[i + 1]) {
+      float span = calibf_table_corr[i + 1] - calibf_table_corr[i];
+      if (span > 0.01f) {
+        float frac = (corr_lpm - calibf_table_corr[i]) / span;
+        return constrain(calibf_table_pwm[i] + frac * (calibf_table_pwm[i + 1] - calibf_table_pwm[i]), 0.0f, 100.0f);
+      }
+      return calibf_table_pwm[i];
+    }
+  }
+
+  return 35.0f;
+}
+
+void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[], const float pwm_pts[]) {
   if (n_pts < 2 || n_pts > CALIBF_MAX_TABLE_PTS) return;
+
+  const float default_pwms[CALIBF_MAX_TABLE_PTS] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f, 95.0f};
 
   // Enforce strictly monotonic increasing points
   float clean_raw[CALIBF_MAX_TABLE_PTS];
   float clean_corr[CALIBF_MAX_TABLE_PTS];
+  float clean_pwm[CALIBF_MAX_TABLE_PTS];
   int clean_n = 0;
   for (int i = 0; i < n_pts && clean_n < CALIBF_MAX_TABLE_PTS; i++) {
     if (raw_pts[i] > 0.5f && corr_pts[i] > 0.5f) {
       if (clean_n == 0 || (raw_pts[i] > clean_raw[clean_n - 1] + 0.1f && corr_pts[i] > clean_corr[clean_n - 1])) {
         clean_raw[clean_n] = raw_pts[i];
         clean_corr[clean_n] = corr_pts[i];
+        clean_pwm[clean_n] = pwm_pts ? pwm_pts[i] : default_pwms[i];
         clean_n++;
       }
     }
@@ -405,6 +448,7 @@ void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[])
   for (int i = 0; i < clean_n; i++) {
     p.putFloat(("r_" + String(i)).c_str(), clean_raw[i]);
     p.putFloat(("c_" + String(i)).c_str(), clean_corr[i]);
+    p.putFloat(("p_" + String(i)).c_str(), clean_pwm[i]);
   }
   // Store aggregate K for fallback
   float sum_raw = 0, sum_corr = 0;
@@ -418,11 +462,13 @@ void save_calibf_table(int n_pts, const float raw_pts[], const float corr_pts[])
   for (int i = 0; i < clean_n; i++) {
     calibf_table_raw[i] = clean_raw[i];
     calibf_table_corr[i] = clean_corr[i];
+    calibf_table_pwm[i] = clean_pwm[i];
   }
   Serial.printf("Sensors: Saved %d-point strictly monotonic calibration curve to NVRAM (avg K=%.4f).\n", clean_n, avg_k);
 }
 
 void load_calibf_table(void) {
+  const float default_pwms[CALIBF_MAX_TABLE_PTS] = {30.0f, 40.0f, 52.0f, 65.0f, 80.0f, 95.0f};
   Preferences p;
   p.begin("calibf", true);
   if (p.isKey("n_pts")) {
@@ -430,14 +476,17 @@ void load_calibf_table(void) {
     if (n >= 2 && n <= CALIBF_MAX_TABLE_PTS) {
       float clean_raw[CALIBF_MAX_TABLE_PTS];
       float clean_corr[CALIBF_MAX_TABLE_PTS];
+      float clean_pwm[CALIBF_MAX_TABLE_PTS];
       int clean_n = 0;
       for (int i = 0; i < n; i++) {
         float r = p.getFloat(("r_" + String(i)).c_str(), 0.0f);
         float c = p.getFloat(("c_" + String(i)).c_str(), 0.0f);
+        float pwm = p.getFloat(("p_" + String(i)).c_str(), (i < CALIBF_MAX_TABLE_PTS) ? default_pwms[i] : 50.0f);
         if (r > 0.5f && c > 0.5f) {
           if (clean_n == 0 || (r > clean_raw[clean_n - 1] + 0.1f && c > clean_corr[clean_n - 1])) {
             clean_raw[clean_n] = r;
             clean_corr[clean_n] = c;
+            clean_pwm[clean_n] = pwm;
             clean_n++;
           }
         }
@@ -447,11 +496,12 @@ void load_calibf_table(void) {
         for (int i = 0; i < clean_n; i++) {
           calibf_table_raw[i] = clean_raw[i];
           calibf_table_corr[i] = clean_corr[i];
+          calibf_table_pwm[i] = clean_pwm[i];
         }
         Serial.printf("Sensors: Loaded %d-point sanitized monotonic calibration curve from NVRAM.\n", calibf_table_size);
         for (int i = 0; i < calibf_table_size; i++) {
-          Serial.printf("  Point %d: Raw=%.2f LPM -> Corrected=%.2f LPM (K=%.4f)\n", 
-                        i + 1, calibf_table_raw[i], calibf_table_corr[i], 
+          Serial.printf("  Point %d: PWM=%.0f%% -> Raw=%.2f LPM -> Corrected=%.2f LPM (K=%.4f)\n", 
+                        i + 1, calibf_table_pwm[i], calibf_table_raw[i], calibf_table_corr[i], 
                         calibf_table_raw[i] > 0 ? (calibf_table_corr[i] / calibf_table_raw[i]) : 1.0f);
         }
       }

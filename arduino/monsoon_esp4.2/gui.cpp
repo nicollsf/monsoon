@@ -103,7 +103,8 @@ void serialcmd(char cmd)
   // Toggle disable heaters
   if( cmd == 'H' ) {
     htrs_forcedisable = !htrs_forcedisable;
-    btLog("Toggle: htrs_forcedisable=" + String(htrs_forcedisable));
+    btLog(htrs_forcedisable ? "HEATERS DISABLED" : "HEATERS ACTIVE");
+    mqtt_log(htrs_forcedisable ? "HEATERS DISABLED" : "HEATERS ACTIVE");
     report_state();
   }
 
