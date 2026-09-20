@@ -1,7 +1,7 @@
 {
   "Configurations": [
     {
-      "Version": "1.0.75",
+      "Version": "1.0.76",
       "URL": "http://10.0.0.9/ota/firmware.bin"
     }
   ]

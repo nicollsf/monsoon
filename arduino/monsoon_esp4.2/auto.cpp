@@ -245,31 +245,36 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // TCP AIMD Scavenge Level Probing:
+  // TCP AIMD Scavenge Level Probing with Progressive Back-Off:
   // 1. Congestion Signal (Top float switch triggered -> tank is 100% full):
-  //    - Gently back off recovery flow to slightly below delivery (Q_del - 0.4 LPM)
-  //      so the water level drops smoothly below the top switch without hard pump shutdown.
-  //    - Reset positive integral windup.
+  //    - Instantly step delta to negative (-0.35 LPM) to stop filling.
+  //    - If tank_full PERSISTS, progressively decrease delta (-0.01 LPM per 500ms / -0.02 LPM/sec)
+  //      down to -1.5 LPM to guarantee the level drops even under severe flow miscalibration.
+  //    - Reset positive integral windup immediately.
   // 2. Post-Full Stabilization Latch:
-  //    - Hold delta at 0.0 LPM for 5 seconds after tank_full clears to clear float switch hysteresis.
+  //    - When tank_full clears, hold delta at 0.0 LPM for 5 seconds to clear float hysteresis.
   // 3. Additive Increase:
-  //    - Gently ramp delta up (+0.005 LPM per 500ms = +0.01 LPM/sec = +0.60 LPM/min, capped at +1.5 LPM)
-  //      to drain the shower pan and slowly climb back toward the top switch for the next level probe.
+  //    - Gently ramp delta up (+0.005 LPM per 500ms = +0.01 LPM/sec = +0.60 LPM/min, capped at +1.0 LPM)
+  //      to slowly draw from the pan buffer and gently probe back toward the top switch.
   if (tank_full) {
     scavenge_tank_full_last_time = now;
-    scavenge_delta_lpm = -0.4f; // Controlled back-off below delivery
+    if (scavenge_delta_lpm > -0.35f) {
+      scavenge_delta_lpm = -0.35f; // Initial step back-off
+    } else {
+      scavenge_delta_lpm = max(-1.5f, scavenge_delta_lpm - 0.01f); // Progressive decrease if still full
+    }
     if (auto_scavenge_integral > 0.0f) auto_scavenge_integral = 0.0f;
   } else if (now - scavenge_tank_full_last_time < 5000) {
     scavenge_delta_lpm = 0.0f; // 5s hysteresis stabilization
   } else if (flow_lpm0 >= 1.0f) {
-    scavenge_delta_lpm = min(1.5f, scavenge_delta_lpm + 0.005f); // Additive Increase
+    scavenge_delta_lpm = min(1.0f, scavenge_delta_lpm + 0.005f); // Additive Increase capped at +1.0 LPM
   } else {
     scavenge_delta_lpm = 0.2f;
     auto_scavenge_integral = 0.0f;
   }
 
   // Desired recovery flow in standardized TRUE delivery units (LPM)
-  float target_rec_lpm = max(1.5f, flow_lpm0 + scavenge_delta_lpm);
+  float target_rec_lpm = max(1.2f, flow_lpm0 + scavenge_delta_lpm);
   auto_scavenge_target_lpm = target_rec_lpm;
 
   // 1. Feedforward baseline: Direct calibrated recovery PWM lookup from true delivery-unit target flow
