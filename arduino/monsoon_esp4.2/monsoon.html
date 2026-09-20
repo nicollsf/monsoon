@@ -113,7 +113,7 @@
         </div>
       </div>
 
-      <!-- State progression & Mode -->
+      <!-- State progression -->
       <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
         <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">AUTO SEQUENCING</h2>
         <div class="grid grid-cols-2 gap-4">
@@ -123,12 +123,6 @@
         <div class="pt-2 text-center text-sm border-t border-gray-800 mt-2">
           <span class="text-xs text-gray-500 uppercase tracking-wider block mb-1">Next Proposed State</span>
           <span id="next-state-display" class="inline-block px-4 py-1.5 bg-yellow-950/30 border border-yellow-700/30 rounded text-yellow-400 font-bold uppercase tracking-wider min-w-[120px]">--</span>
-        </div>
-        <div class="flex items-center justify-between text-xs pt-2 border-t border-gray-800">
-          <span class="text-gray-400">Mode:</span>
-          <button onclick="sendCommand('a')" id="btn-mode-toggle" class="bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded text-cyan-400 font-bold border border-gray-700 transition">
-            <span id="mode-text">TWO-PUMP (AUTO)</span>
-          </button>
         </div>
       </div>
 
@@ -722,15 +716,6 @@
             telemetryHtrBadge.className = isHtrActive
               ? "text-[10px] font-bold px-2.5 py-0.5 rounded bg-amber-950/60 border border-amber-700/60 text-amber-400"
               : "text-[10px] font-bold px-2.5 py-0.5 rounded bg-blue-950/60 border border-blue-700/60 text-blue-400";
-          }
-          break;
-
-        case 'A': // Operation mode (*AR255G255B255* = Two-Pump, *AR0G0B0* = Single-Pump)
-          const isDouble = (data.indexOf('R255') !== -1);
-          const modeText = document.getElementById('mode-text');
-          if (modeText) {
-            modeText.innerText = isDouble ? "TWO-PUMP (AUTO)" : "SINGLE-PUMP (MANUAL)";
-            modeText.className = isDouble ? "text-cyan-400 font-bold" : "text-yellow-400 font-bold";
           }
           break;
 
