@@ -95,9 +95,12 @@ void loop_heaters(void)
 void loop_pumps_and_valves(void)
 {
   // If the tank is full, set safety vetoes for recovery pump and inlet valve.
-  // Exception: during scavenge pump calibration, we must keep the scavenge pump running to measure it.
+  // Exception: during scavenge pump calibration or when closed-loop scavenge control is active (STATE_WARM / STATE_WASH),
+  // we do not hard-cut the recovery pump to 0 PWM, allowing the closed-loop AIMD controller to throttle it gracefully.
   if (tank_full) {
-    if ((auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) || auto_state == STATE_CALIBF) {
+    if ((auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) || 
+        auto_state == STATE_CALIBF || 
+        auto_scavengecontrolenable) {
       pump_safety_veto = false;
     } else {
       pump_safety_veto = true;

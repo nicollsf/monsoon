@@ -245,21 +245,24 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // Dynamic Scavenge Delta in True Delivery Flow Units (LPM):
-  // - When tank reaches FULL: IMMEDIATELY snap delta to 0.0 LPM and reset integral
-  //   so recovery instantly drops to match delivery flow without overflowing.
-  // - Post-Full Cooldown Latch: Hold delta at 0.0 LPM for 25 seconds after tank_full clears
-  //   to prevent hunting/rapid re-triggering of the upper float switch.
-  // - When 25s post-full period has elapsed: gently ramp delta up (+0.0025 LPM per 500ms / +0.005 LPM/sec = +0.30 LPM/min)
-  //   to draw down any excess water in the pan without causing short-period cycling.
+  // TCP AIMD Scavenge Level Probing:
+  // 1. Congestion Signal (Top float switch triggered -> tank is 100% full):
+  //    - Gently back off recovery flow to slightly below delivery (Q_del - 0.4 LPM)
+  //      so the water level drops smoothly below the top switch without hard pump shutdown.
+  //    - Reset positive integral windup.
+  // 2. Post-Full Stabilization Latch:
+  //    - Hold delta at 0.0 LPM for 5 seconds after tank_full clears to clear float switch hysteresis.
+  // 3. Additive Increase:
+  //    - Gently ramp delta up (+0.005 LPM per 500ms = +0.01 LPM/sec = +0.60 LPM/min, capped at +1.5 LPM)
+  //      to drain the shower pan and slowly climb back toward the top switch for the next level probe.
   if (tank_full) {
     scavenge_tank_full_last_time = now;
-    scavenge_delta_lpm = 0.0f;
+    scavenge_delta_lpm = -0.4f; // Controlled back-off below delivery
     if (auto_scavenge_integral > 0.0f) auto_scavenge_integral = 0.0f;
-  } else if (now - scavenge_tank_full_last_time < 25000) {
-    scavenge_delta_lpm = 0.0f; // 25s stabilization hold
+  } else if (now - scavenge_tank_full_last_time < 5000) {
+    scavenge_delta_lpm = 0.0f; // 5s hysteresis stabilization
   } else if (flow_lpm0 >= 1.0f) {
-    scavenge_delta_lpm = min(4.5f, scavenge_delta_lpm + 0.0025f);
+    scavenge_delta_lpm = min(1.5f, scavenge_delta_lpm + 0.005f); // Additive Increase
   } else {
     scavenge_delta_lpm = 0.2f;
     auto_scavenge_integral = 0.0f;
