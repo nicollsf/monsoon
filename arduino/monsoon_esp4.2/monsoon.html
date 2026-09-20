@@ -89,35 +89,84 @@
     <!-- Column 1: Controls -->
     <div class="space-y-6 lg:col-span-1">
       
-      <!-- Temperature Target Controller -->
-      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
-        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2 mb-4">TEMPERATURE SETPOINT</h2>
+      <!-- Temperature Target & Master Heaters Controller -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">TEMPERATURE & HEATERS</h2>
         <div class="flex items-center justify-between">
-          <button onclick="sendCommand('u')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700">-</button>
+          <button onclick="sendCommand('u')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700 transition shadow">-</button>
           <div class="text-center">
             <span id="setpoint-val" class="text-4xl font-extrabold text-cyan-400">--.-</span>
             <span class="text-gray-400 text-xl font-medium">&deg;C</span>
           </div>
-          <button onclick="sendCommand('U')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700">+</button>
+          <button onclick="sendCommand('U')" class="bg-gray-800 hover:bg-gray-700 text-white text-2xl font-bold w-12 h-12 rounded-lg border border-gray-700 transition shadow">+</button>
+        </div>
+
+        <!-- Master Heater Override Toggle (H) -->
+        <div class="pt-2 border-t border-gray-800">
+          <button id="btn-master-heater" onclick="sendCommand('H')" class="w-full bg-amber-950/30 border border-amber-600/50 hover:bg-amber-900/40 text-gray-200 py-2.5 px-3 rounded-lg flex items-center justify-between transition-all duration-200 shadow">
+            <div class="flex items-center gap-2.5">
+              <span id="master-heater-dot" class="w-3 h-3 rounded-full bg-amber-500 shadow-lg shadow-amber-500/50 animate-pulse"></span>
+              <span class="text-xs font-semibold uppercase tracking-wide">Master Heaters</span>
+            </div>
+            <span id="master-heater-status" class="text-amber-400 font-bold text-xs">ACTIVE (HEATING)</span>
+          </button>
         </div>
       </div>
 
-      <!-- State progression -->
+      <!-- State progression & Mode -->
       <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
         <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">AUTO SEQUENCING</h2>
         <div class="grid grid-cols-2 gap-4">
-          <button onclick="sendCommand('S')" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 py-3 rounded-lg font-semibold text-gray-200">Next State</button>
-          <button onclick="sendCommand('Y')" class="bg-cyan-700 hover:bg-cyan-600 border border-cyan-600 py-3 rounded-lg font-semibold text-white">Go / Confirm</button>
+          <button onclick="sendCommand('S')" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 py-3 rounded-lg font-semibold text-gray-200 transition shadow">Next State (S)</button>
+          <button onclick="sendCommand('Y')" class="bg-cyan-700 hover:bg-cyan-600 border border-cyan-600 py-3 rounded-lg font-semibold text-white transition shadow">Go / Confirm (Y)</button>
         </div>
         <div class="pt-2 text-center text-sm border-t border-gray-800 mt-2">
           <span class="text-xs text-gray-500 uppercase tracking-wider block mb-1">Next Proposed State</span>
           <span id="next-state-display" class="inline-block px-4 py-1.5 bg-yellow-950/30 border border-yellow-700/30 rounded text-yellow-400 font-bold uppercase tracking-wider min-w-[120px]">--</span>
         </div>
+        <div class="flex items-center justify-between text-xs pt-2 border-t border-gray-800">
+          <span class="text-gray-400">Mode:</span>
+          <button onclick="sendCommand('a')" id="btn-mode-toggle" class="bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded text-cyan-400 font-bold border border-gray-700 transition">
+            <span id="mode-text">TWO-PUMP (AUTO)</span>
+          </button>
+        </div>
       </div>
 
-      <!-- Manual Relays & Pumps -->
+      <!-- Manual Pump Speed Tuning -->
       <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
-        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">MANUAL OVERRIDES</h2>
+        <div class="flex items-center justify-between border-b border-gray-800 pb-2">
+          <h2 class="text-md font-semibold text-gray-300">PUMP SPEED TUNING</h2>
+          <span class="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Manual &plusmn;5%</span>
+        </div>
+
+        <!-- Delivery Pump Speed (C/c) -->
+        <div class="bg-gray-950 border border-gray-800 rounded-lg p-3 flex items-center justify-between">
+          <div>
+            <div class="text-xs text-gray-400 font-medium">Delivery Pump (C/c)</div>
+            <div class="text-xl font-bold text-cyan-400"><span id="pwm0-tune-val">--</span>%</div>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="sendCommand('c')" title="Decrease Delivery Speed by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">-5%</button>
+            <button onclick="sendCommand('C')" title="Increase Delivery Speed by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">+5%</button>
+          </div>
+        </div>
+
+        <!-- Scavenge / Recovery Pump Speed (B/b) -->
+        <div class="bg-gray-950 border border-gray-800 rounded-lg p-3 flex items-center justify-between">
+          <div>
+            <div class="text-xs text-gray-400 font-medium">Scavenge Pump (B/b)</div>
+            <div class="text-xl font-bold text-orange-400"><span id="pwm1-tune-val">--</span>%</div>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="sendCommand('b')" title="Decrease Scavenge Speed by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">-5%</button>
+            <button onclick="sendCommand('B')" title="Increase Scavenge Speed by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">+5%</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual Relays & Valves Switches -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">MANUAL RELAYS &amp; VALVES</h2>
         
         <div class="grid grid-cols-2 gap-3 text-sm">
           <!-- Inlet Valve -->
@@ -142,45 +191,56 @@
           </button>
           <!-- Main Heater -->
           <button onclick="sendCommand('j')" id="btn-relay-4" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
-            <span>Main Heater</span>
+            <span>Main Heater (4kW)</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-4"></span>
           </button>
           <!-- Aux Heater -->
           <button onclick="sendCommand('i')" id="btn-relay-3" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
-            <span>Aux Heater (A)</span>
+            <span>Aux Heater (2kW)</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-3"></span>
-          </button>
-          <!-- Scavenge Pump -->
-          <button onclick="sendCommand('m')" id="btn-pump-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
-            <span>Scavenge Pump</span>
-            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-0"></span>
           </button>
           <!-- Delivery Pump -->
           <button onclick="sendCommand('n')" id="btn-pump-1" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Delivery Pump</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-1"></span>
           </button>
+          <!-- Scavenge Pump -->
+          <button onclick="sendCommand('m')" id="btn-pump-0" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
+            <span>Scavenge Pump</span>
+            <span class="w-3 h-3 rounded-full bg-gray-600" id="led-pump-0"></span>
+          </button>
           <!-- Burp Valve -->
           <button onclick="sendCommand('l')" id="btn-relay-6" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Burp Valve (Bleed)</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-6"></span>
           </button>
-          <!-- Pumps Power Relay -->
+          <!-- Pumps Safety Relay -->
           <button onclick="sendCommand('k')" id="btn-relay-5" class="bg-gray-800 border border-gray-700 py-3 px-2 rounded-lg font-medium text-left flex justify-between items-center transition-all duration-200">
             <span>Pumps Safety Relay</span>
             <span class="w-3 h-3 rounded-full bg-gray-600" id="led-relay-5"></span>
           </button>
         </div>
+      </div>
 
+      <!-- System Controls & Safety -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-3">
+        <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">SYSTEM CONTROLS</h2>
+        
         <!-- Emergency Kill -->
-        <button onclick="sendCommand('N')" class="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-4 rounded-lg shadow border border-red-800 transition-all duration-200 mt-4 tracking-wider">
+        <button onclick="sendCommand('N')" class="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3.5 rounded-lg shadow border border-red-800 transition-all duration-200 tracking-wider">
           EMERGENCY SYSTEM STOP (KILL)
         </button>
 
-        <!-- Diagnostics -->
-        <button onclick="sendCommand('R')" class="w-full bg-gray-800 hover:bg-red-950/20 hover:border-red-900/50 text-red-400 border border-gray-700 py-3 rounded-lg font-semibold text-center transition-all duration-200 text-xs uppercase tracking-wider mt-3">
-          Reboot ESP32
-        </button>
+        <div class="grid grid-cols-2 gap-3 pt-1">
+          <!-- Diagnostics Reboot -->
+          <button onclick="sendCommand('R')" class="bg-gray-800 hover:bg-red-950/20 hover:border-red-900/50 text-red-400 border border-gray-700 py-2.5 rounded-lg font-semibold text-center transition-all duration-200 text-xs uppercase tracking-wider">
+            Reboot ESP32 (R)
+          </button>
+          <!-- OTA Update Trigger -->
+          <button onclick="sendCommand('O')" class="bg-gray-800 hover:bg-cyan-950/20 hover:border-cyan-900/50 text-cyan-400 border border-gray-700 py-2.5 rounded-lg font-semibold text-center transition-all duration-200 text-xs uppercase tracking-wider">
+            Trigger OTA (O)
+          </button>
+        </div>
       </div>
 
     </div>
@@ -219,6 +279,22 @@
           <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Pressure</span>
           <span id="pressure-val" class="text-3xl font-extrabold text-white">---</span>
           <span class="text-gray-400 font-semibold"> kPa</span>
+        </div>
+      </div>
+
+      <!-- Status & Float Switches Banner -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-gray-400 uppercase font-semibold tracking-wider">Bottom Float:</span>
+          <span id="tank-empty-badge" class="text-[10px] font-bold px-2.5 py-0.5 rounded bg-green-950/60 border border-green-700/60 text-green-400">WATER PRESENT (SAFE)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-gray-400 uppercase font-semibold tracking-wider">Top Float:</span>
+          <span id="tank-full-badge" class="text-[10px] font-bold px-2.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400">NORMAL LEVEL</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-gray-400 uppercase font-semibold tracking-wider">Heaters Master:</span>
+          <span id="telemetry-htr-badge" class="text-[10px] font-bold px-2.5 py-0.5 rounded bg-amber-950/60 border border-amber-700/60 text-amber-400">ACTIVE</span>
         </div>
       </div>
 
@@ -610,10 +686,73 @@
 
         case 'f': // Scavenge/Recovery Pump speed percentage
           document.getElementById('pwm1-val').innerText = data;
+          if (document.getElementById('pwm1-tune-val')) {
+            document.getElementById('pwm1-tune-val').innerText = data;
+          }
           break;
 
         case 'F': // Delivery Pump speed percentage
           document.getElementById('pwm0-val').innerText = data;
+          if (document.getElementById('pwm0-tune-val')) {
+            document.getElementById('pwm0-tune-val').innerText = data;
+          }
+          break;
+
+        case 'H': // Master Heaters Status (*HR255G0B0* or *HR0G0B0*)
+          const isHtrActive = (data.indexOf('R255') !== -1);
+          const htrBtn = document.getElementById('btn-master-heater');
+          const htrStatus = document.getElementById('master-heater-status');
+          const htrDot = document.getElementById('master-heater-dot');
+          const telemetryHtrBadge = document.getElementById('telemetry-htr-badge');
+          if (htrStatus && htrDot && htrBtn) {
+            if (isHtrActive) {
+              htrStatus.innerText = "ACTIVE (HEATING)";
+              htrStatus.className = "text-amber-400 font-bold text-xs";
+              htrDot.className = "w-3 h-3 rounded-full bg-amber-500 shadow-lg shadow-amber-500/50 animate-pulse";
+              htrBtn.className = "w-full bg-amber-950/30 border border-amber-600/50 hover:bg-amber-900/40 text-gray-200 py-2.5 px-3 rounded-lg flex items-center justify-between transition-all duration-200 shadow";
+            } else {
+              htrStatus.innerText = "FORCED OFF (COLD)";
+              htrStatus.className = "text-blue-400 font-bold text-xs";
+              htrDot.className = "w-3 h-3 rounded-full bg-blue-500 shadow-lg shadow-blue-500/50";
+              htrBtn.className = "w-full bg-blue-950/30 border border-blue-600/50 hover:bg-blue-900/40 text-gray-200 py-2.5 px-3 rounded-lg flex items-center justify-between transition-all duration-200 shadow";
+            }
+          }
+          if (telemetryHtrBadge) {
+            telemetryHtrBadge.innerText = isHtrActive ? "ACTIVE" : "FORCED OFF (COLD)";
+            telemetryHtrBadge.className = isHtrActive
+              ? "text-[10px] font-bold px-2.5 py-0.5 rounded bg-amber-950/60 border border-amber-700/60 text-amber-400"
+              : "text-[10px] font-bold px-2.5 py-0.5 rounded bg-blue-950/60 border border-blue-700/60 text-blue-400";
+          }
+          break;
+
+        case 'A': // Operation mode (*AR255G255B255* = Two-Pump, *AR0G0B0* = Single-Pump)
+          const isDouble = (data.indexOf('R255') !== -1);
+          const modeText = document.getElementById('mode-text');
+          if (modeText) {
+            modeText.innerText = isDouble ? "TWO-PUMP (AUTO)" : "SINGLE-PUMP (MANUAL)";
+            modeText.className = isDouble ? "text-cyan-400 font-bold" : "text-yellow-400 font-bold";
+          }
+          break;
+
+        case 'Q': // Level sensors (*Q1010* or *Q01*)
+          if (data.length >= 2) {
+            const isEmpty = (data[0] === '0');
+            const isFull = (data[1] === '1');
+            const emptyEl = document.getElementById('tank-empty-badge');
+            const fullEl = document.getElementById('tank-full-badge');
+            if (emptyEl) {
+              emptyEl.innerText = isEmpty ? "TANK DRY (EMPTY)" : "WATER PRESENT (SAFE)";
+              emptyEl.className = isEmpty 
+                ? "text-[10px] font-bold px-2.5 py-0.5 rounded bg-red-950/60 border border-red-700/60 text-red-400 animate-pulse"
+                : "text-[10px] font-bold px-2.5 py-0.5 rounded bg-green-950/60 border border-green-700/60 text-green-400";
+            }
+            if (fullEl) {
+              fullEl.innerText = isFull ? "TANK FULL (OVERFLOW)" : "NORMAL LEVEL";
+              fullEl.className = isFull 
+                ? "text-[10px] font-bold px-2.5 py-0.5 rounded bg-yellow-950/60 border border-yellow-700/60 text-yellow-400 animate-pulse"
+                : "text-[10px] font-bold px-2.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400";
+            }
+          }
           break;
 
         case 'Z': // OTA Version (Z string ends with '*' if update is available)
