@@ -435,32 +435,37 @@ void loop_tempcontrol(void)
         extern bool delivery_flow_restricted;
         extern unsigned long flow_restricted_since;
 
-        bool filter_restricted_persistent = delivery_flow_restricted && (flow_restricted_since != 0) && (now - flow_restricted_since >= 10000);
+        // Delivery flow restricted for >= 5 seconds
+        bool filter_restricted_persistent = delivery_flow_restricted && (flow_restricted_since != 0) && (now - flow_restricted_since >= 5000);
 
         bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
 
-        if (!in_softstart && (now - wash_speed_start_time > 20000) && filter_restricted_persistent) {
-          if (temp1 > temp_setpoint + 2.5f && current_power_stage > 0) {
-            current_power_stage = 0;
+        if (!in_softstart && (now - wash_speed_start_time > 15000) && filter_restricted_persistent) {
+          if (temp1 > temp_setpoint + 2.4f && current_power_stage > 0) {
+            current_power_stage = 0; // 0 kW
             last_stage_switch_time = now;
-          } else if (temp1 > temp_setpoint + 1.8f && current_power_stage > 1) {
+            btLog("Hydraulic Limit: Temp high (" + String(temp1, 1) + "C). Heaters Stage 0 (0 kW).");
+          } else if (temp1 > temp_setpoint + 1.6f && current_power_stage > 1) {
             if (now - last_stage_switch_time >= 3000) {
-              current_power_stage = 1;
+              current_power_stage = 1; // 2 kW (Aux only)
               last_stage_switch_time = now;
+              btLog("Hydraulic Limit: Temp high (" + String(temp1, 1) + "C). Heaters Stage 1 (2 kW).");
             }
-          } else if (temp1 > temp_setpoint + 1.0f && current_power_stage > 2) {
+          } else if (temp1 > temp_setpoint + 0.8f && current_power_stage > 2) {
             if (now - last_stage_switch_time >= 3000) {
-              current_power_stage = 2;
+              current_power_stage = 2; // 4 kW (Main only, Aux OFF)
               last_stage_switch_time = now;
+              btLog("Hydraulic Limit: Flow capped. Turning OFF Aux Heater -> Stage 2 (4 kW).");
             }
           }
         }
 
         // Hysteresis recovery: Step back up to full power if cooled, flow restriction cleared, or during soft-start
-        if (in_softstart || temp1 <= temp_setpoint + 0.5f || !filter_restricted_persistent || (now - wash_speed_start_time <= 20000)) {
+        if (in_softstart || temp1 <= temp_setpoint + 0.3f || !filter_restricted_persistent || (now - wash_speed_start_time <= 15000)) {
           if (current_power_stage < 3 && (now - last_stage_switch_time >= 3000)) {
             current_power_stage = 3;
             last_stage_switch_time = now;
+            btLog("Thermal/Flow restriction cleared. Restoring Heaters Stage 3 (6 kW).");
           }
         }
 
@@ -566,9 +571,12 @@ void loop_tempcontrolwithspeed(void)
   if (dt <= 0.0f || dt > 1.0f) dt = 0.05f;
   last_delivery_calc_time = now;
 
-  // Exponential moving average filter for measured recovery flow (tau = 2.5s)
-  if (flow_rec_smooth <= 0.01f) flow_rec_smooth = flow_lpm1;
-  else flow_rec_smooth += (flow_lpm1 - flow_rec_smooth) * (dt / 2.5f);
+  // Calibrated recovery flow in true delivery units
+  float rec_flow = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : (flow_lpm1 * flow_rec_scale);
+
+  // Exponential moving average filter for measured calibrated recovery flow (tau = 2.5s)
+  if (flow_rec_smooth <= 0.01f) flow_rec_smooth = rec_flow;
+  else flow_rec_smooth += (rec_flow - flow_rec_smooth) * (dt / 2.5f);
 
   float desired_flow = (float)tc_pidoutput;
 
@@ -578,23 +586,23 @@ void loop_tempcontrolwithspeed(void)
   if (in_softstart) {
     float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
     desired_flow = min(desired_flow, max_soft_ramp);
-    flow_rec_smooth = max(flow_rec_smooth, flow_lpm1); // Pre-seed smoothed recovery
+    flow_rec_smooth = max(flow_rec_smooth, rec_flow); // Pre-seed smoothed recovery
     delivery_flow_restricted = false;
     flow_restricted_since = 0;
   } else {
     // 2. Steady-State Hydraulic Protection:
-    // Only activate after running in WASH_CYCLE for at least 20 seconds (to prevent premature clamping)
+    // Only activate after running in WASH_CYCLE for at least 15 seconds (to prevent premature clamping)
     bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
-    bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 20000)) || 
-                              (!in_wash_cycle && (now - wash_speed_start_time >= 30000));
+    bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 15000)) || 
+                              (!in_wash_cycle && (now - wash_speed_start_time >= 20000));
 
-    // Hydraulic Protection applies ONLY if the recovery pump is saturated/working hard (sc_setperc[RPUMPR] >= 80%)
-    // but recovery flow remains constrained (< 5.5 LPM), indicating a genuinely dirty/restricted filter.
+    // Hydraulic Protection: If recovery pump is working hard (PWM >= 80%) and delivery exceeds recovery capacity,
+    // clamp delivery flow to recovery capacity minus 0.3 LPM so the tank never empties.
     bool recovery_saturated = (sc_setperc[RPUMPR] >= 80.0f);
 
     if (steady_state_ready && recovery_saturated && flow_rec_smooth > 1.0f) {
-      float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.5f);
-      if (desired_flow > safe_delivery_cap && flow_rec_smooth < 5.5f) {
+      float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.3f);
+      if (desired_flow > safe_delivery_cap) {
         desired_flow = safe_delivery_cap;
         if (!delivery_flow_restricted) {
           delivery_flow_restricted = true;
