@@ -50,18 +50,20 @@ void serialcmd(char cmd)
 {
   //Serial.print("Entered serialcmd with cmd=");  Serial.println(cmd);
 
-  // Kill
+  // Emergency Kill / Stop
   if( cmd == 'N' ) {
-    btLog("KILL");
-    setup_pins();
-    rpinsen_reset();
+    btLog("EMERGENCY STOP (KILL)");
+    for( int i=0; i<7; i++ ) {
+      setrelay_en(i, ROFF);
+      setrelay(i, ROFF);
+    }
     pumpsen_reset();
-    setup_flowsens();
-    setup_psens();
-    setup_speedcontrol();
-    interrupts();
+    setpump_perc(RPUMPD, 0);
+    setpump_perc(RPUMPR, 0);
 
-    auto_switchstate(STATE_OFF);  //auto_state = STATE_OFF;
+    auto_switchstate(STATE_OFF, "Emergency Stop");
+    report_rpins();
+    report_valve_status();
     report_status();
   }
 
