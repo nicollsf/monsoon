@@ -1119,6 +1119,27 @@ void setup_auto(void)
   unsigned long auto_totalwashtime = 0;
   EEPROM.get(eepromaddr0 + 2, auto_totalwashtime);
   Serial.printf("NVS Setup: Persistent total wash time loaded = %.1f minutes\n", auto_totalwashtime / 60000.0f);
+
+  // Check previous state stored in EEPROM before power loss / reset
+  byte last_state_raw = 0;
+  EEPROM.get(eepromaddr0, last_state_raw);
+  auto_states last_state = (auto_states)last_state_raw;
+  if (last_state < STATE_WTF) {
+    Serial.printf("NVS Setup: Previous state before reset = %d (%s)\n", last_state, auto_statestrs[last_state]);
+  }
+
+  // If power tripped or reset occurred during an active cycle:
+  if (last_state != STATE_OFF && last_state != STATE_NONE && last_state < STATE_WTF) {
+    // Keep ball valve energized (RON / closed) to preserve pan/tank water
+    setrelay_en(RPBALLVALVE, RON);
+    setrelay(RPBALLVALVE, RON);
+    ball_valve_off_start = millis();
+    btLog("Power Recovery: Resumed from active cycle (" + String(auto_statestrs[last_state]) + "). Ball valve held CLOSED for 5 min.");
+  } else {
+    // Previous state was cleanly OFF or NONE
+    setrelay_en(RPBALLVALVE, ROFF);
+    setrelay(RPBALLVALVE, ROFF);
+  }
 }
 
 
