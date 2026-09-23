@@ -435,7 +435,7 @@ void loop_tempcontrol(void)
         extern bool delivery_flow_restricted;
         extern unsigned long flow_restricted_since;
 
-        // Delivery flow restricted for >= 5 seconds
+        // Delivery flow restricted persistently for >= 5 seconds
         bool filter_restricted_persistent = delivery_flow_restricted && (flow_restricted_since != 0) && (now - flow_restricted_since >= 5000);
 
         bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
@@ -460,8 +460,8 @@ void loop_tempcontrol(void)
           }
         }
 
-        // Hysteresis recovery: Step back up to full power if cooled, flow restriction cleared, or during soft-start
-        if (in_softstart || temp1 <= temp_setpoint + 0.3f || !filter_restricted_persistent || (now - wash_speed_start_time <= 15000)) {
+        // Hysteresis recovery: Step back up to full power ONLY when water has cooled to setpoint + 0.3°C
+        if (in_softstart || (temp1 <= temp_setpoint + 0.3f && !delivery_flow_restricted)) {
           if (current_power_stage < 3 && (now - last_stage_switch_time >= 3000)) {
             current_power_stage = 3;
             last_stage_switch_time = now;
@@ -590,27 +590,33 @@ void loop_tempcontrolwithspeed(void)
     delivery_flow_restricted = false;
     flow_restricted_since = 0;
   } else {
-    // 2. Steady-State Hydraulic Protection:
-    // Only activate after running in WASH_CYCLE for at least 15 seconds (to prevent premature clamping)
+    // 2. Steady-State Hydraulic Protection with Schmitt Trigger Hysteresis:
     bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
     bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 15000)) || 
                               (!in_wash_cycle && (now - wash_speed_start_time >= 20000));
 
-    // Hydraulic Protection: If recovery pump is working hard (PWM >= 80%) and delivery exceeds recovery capacity,
-    // clamp delivery flow to recovery capacity minus 0.3 LPM so the tank never empties.
-    bool recovery_saturated = (sc_setperc[RPUMPR] >= 80.0f);
+    float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.3f);
 
-    if (steady_state_ready && recovery_saturated && flow_rec_smooth > 1.0f) {
-      float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.3f);
-      if (desired_flow > safe_delivery_cap) {
-        desired_flow = safe_delivery_cap;
-        if (!delivery_flow_restricted) {
+    if (steady_state_ready && flow_rec_smooth > 1.0f) {
+      if (!delivery_flow_restricted) {
+        // Condition to ENGAGE clamp: Recovery pump saturated (PWM >= 80%) AND PID demands more than recovery capacity
+        if (sc_setperc[RPUMPR] >= 80.0f && desired_flow > safe_delivery_cap) {
           delivery_flow_restricted = true;
           flow_restricted_since = now;
+          btLog("Hydraulic Clamp Engaged: Recovery saturated. Capping delivery to " + String(safe_delivery_cap, 1) + " LPM.");
         }
       } else {
-        delivery_flow_restricted = false;
-        flow_restricted_since = 0;
+        // Condition to RELEASE clamp: Recovery pump is comfortable (PWM <= 65%) OR water has cooled down and desired flow is within cap
+        if (sc_setperc[RPUMPR] <= 65.0f || (temp1 <= temp_setpoint + 0.2f && desired_flow <= safe_delivery_cap)) {
+          delivery_flow_restricted = false;
+          flow_restricted_since = 0;
+          btLog("Hydraulic Clamp Released: Recovery normalized (" + String(sc_setperc[RPUMPR], 0) + "% PWM).");
+        }
+      }
+
+      // While restricted, firmly clamp delivery flow to safe recovery capacity
+      if (delivery_flow_restricted) {
+        desired_flow = safe_delivery_cap;
       }
     } else {
       delivery_flow_restricted = false;

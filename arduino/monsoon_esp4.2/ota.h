@@ -6,7 +6,7 @@
 // #include "ESP32OTAPull.h"
 
 #define OTA_JSON_URL   "http://10.0.0.9/ota/monsoon.json" // JSON filter file (see below)
-#define OTA_VERSION    "1.0.80" // The current version of this program
+#define OTA_VERSION    "1.0.81" // The current version of this program
 
 
 void ota_update(void);
