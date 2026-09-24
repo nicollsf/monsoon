@@ -460,12 +460,25 @@ void loop_tempcontrol(void)
           }
         }
 
-        // Hysteresis recovery: Step back up to full power ONLY when water has cooled to setpoint + 0.3°C
-        if (in_softstart || (temp1 <= temp_setpoint + 0.3f && !delivery_flow_restricted)) {
-          if (current_power_stage < 3 && (now - last_stage_switch_time >= 3000)) {
+        // Hysteresis recovery: Step back up progressively when water cools down
+        if (in_softstart) {
+          if (current_power_stage < 3) {
             current_power_stage = 3;
             last_stage_switch_time = now;
-            btLog("Thermal/Flow restriction cleared. Restoring Heaters Stage 3 (6 kW).");
+          }
+        } else if (now - last_stage_switch_time >= 5000) {
+          if (current_power_stage == 0 && temp1 <= temp_setpoint + 1.8f) {
+            current_power_stage = 1; // Step up to 2 kW
+            last_stage_switch_time = now;
+            btLog("Water cooling. Stepping up to Heaters Stage 1 (2 kW).");
+          } else if (current_power_stage == 1 && temp1 <= temp_setpoint + 1.0f) {
+            current_power_stage = 2; // Step up to 4 kW
+            last_stage_switch_time = now;
+            btLog("Water cooling. Stepping up to Heaters Stage 2 (4 kW).");
+          } else if (current_power_stage == 2 && temp1 <= temp_setpoint + 0.3f && !delivery_flow_restricted) {
+            current_power_stage = 3; // Step up to full 6 kW only if not hydraulically restricted
+            last_stage_switch_time = now;
+            btLog("Thermal & flow restriction cleared. Restoring Heaters Stage 3 (6 kW).");
           }
         }
 
@@ -590,7 +603,7 @@ void loop_tempcontrolwithspeed(void)
     delivery_flow_restricted = false;
     flow_restricted_since = 0;
   } else {
-    // 2. Steady-State Hydraulic Protection with Schmitt Trigger Hysteresis:
+    // 2. Steady-State Hydraulic Protection with Anti-Windup Clamping:
     bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
     bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 15000)) || 
                               (!in_wash_cycle && (now - wash_speed_start_time >= 20000));
@@ -603,20 +616,22 @@ void loop_tempcontrolwithspeed(void)
         if (sc_setperc[RPUMPR] >= 80.0f && desired_flow > safe_delivery_cap) {
           delivery_flow_restricted = true;
           flow_restricted_since = now;
-          btLog("Hydraulic Clamp Engaged: Recovery saturated. Capping delivery to " + String(safe_delivery_cap, 1) + " LPM.");
+          btLog("Hydraulic Clamp Engaged: Recovery saturated (PWM >= 80%). Clamping delivery to " + String(safe_delivery_cap, 1) + " LPM.");
         }
       } else {
-        // Condition to RELEASE clamp: Recovery pump is comfortable (PWM <= 65%) OR water has cooled down and desired flow is within cap
-        if (sc_setperc[RPUMPR] <= 65.0f || (temp1 <= temp_setpoint + 0.2f && desired_flow <= safe_delivery_cap)) {
+        // Condition to RELEASE clamp: PID demand naturally falls within safe capacity AND temperature is controlled
+        // (Do NOT check recovery PWM to unclamp, as lowering delivery lowers recovery PWM by definition)
+        if ((float)tc_pidoutput <= safe_delivery_cap && temp1 <= temp_setpoint + 0.3f) {
           delivery_flow_restricted = false;
           flow_restricted_since = 0;
-          btLog("Hydraulic Clamp Released: Recovery normalized (" + String(sc_setperc[RPUMPR], 0) + "% PWM).");
+          btLog("Hydraulic Clamp Released: PID demand within safe capacity.");
         }
       }
 
-      // While restricted, firmly clamp delivery flow to safe recovery capacity
+      // While restricted, firmly clamp delivery flow to safe recovery capacity with PID anti-windup
       if (delivery_flow_restricted) {
         desired_flow = safe_delivery_cap;
+        tc_pidoutput = min((double)safe_delivery_cap, tc_pidoutput); // Anti-windup
       }
     } else {
       delivery_flow_restricted = false;
