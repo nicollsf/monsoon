@@ -419,88 +419,49 @@ void loop_tempcontrol(void)
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        // Multi-stage Staged Thermal Control:
-        // Main heater (4kW, RPHEATER) + Aux heater (2kW, RPHEATERA) = 6kW total.
-        // Default: Stage 3 (6kW, both heaters ON) for normal high-flow showers.
-        // If recovery flow is restricted by a dirty filter and delivery is capped for >= 10s:
-        // - Stage 2 (4kW: Main ON, Aux OFF) if temp1 > temp_setpoint + 1.0°C (matches ~4-5 LPM)
-        // - Stage 1 (2kW: Main OFF, Aux ON) if temp1 > temp_setpoint + 1.8°C (matches ~2-3 LPM)
-        // - Stage 0 (0kW: Both OFF) if temp1 > temp_setpoint + 2.5°C
-        // Re-engage full power as water cools to <= temp_setpoint + 0.3°C or flow restriction clears.
-
-        extern int current_power_stage;
-        static unsigned long last_stage_switch_time = 0;
         unsigned long now = millis();
-
-        extern bool delivery_flow_restricted;
-        extern unsigned long flow_restricted_since;
-
-        // Delivery flow restricted persistently for >= 5 seconds
-        bool filter_restricted_persistent = delivery_flow_restricted && (flow_restricted_since != 0) && (now - flow_restricted_since >= 5000);
-
         bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
 
-        if (!in_softstart && (now - wash_speed_start_time > 15000) && filter_restricted_persistent) {
-          if (temp1 > temp_setpoint + 2.4f && current_power_stage > 0) {
-            current_power_stage = 0; // 0 kW
-            last_stage_switch_time = now;
-            btLog("Hydraulic Limit: Temp high (" + String(temp1, 1) + "C). Heaters Stage 0 (0 kW).");
-          } else if (temp1 > temp_setpoint + 1.6f && current_power_stage > 1) {
-            if (now - last_stage_switch_time >= 3000) {
-              current_power_stage = 1; // 2 kW (Aux only)
-              last_stage_switch_time = now;
-              btLog("Hydraulic Limit: Temp high (" + String(temp1, 1) + "C). Heaters Stage 1 (2 kW).");
-            }
-          } else if (temp1 > temp_setpoint + 0.8f && current_power_stage > 2) {
-            if (now - last_stage_switch_time >= 3000) {
-              current_power_stage = 2; // 4 kW (Main only, Aux OFF)
-              last_stage_switch_time = now;
-              btLog("Hydraulic Limit: Flow capped. Turning OFF Aux Heater -> Stage 2 (4 kW).");
-            }
-          }
-        }
+        // Auxiliary Heater Headroom Management:
+        // Main heater (4kW, RPHEATER) + Aux heater (2kW, RPHEATERA) = 6kW total.
+        // If recovery PWM >= 80% for >= 10 seconds continuously, shed Aux heater (power drops to 4kW).
+        // Power reduction drops water temp gently, PID naturally slows delivery flow, and recovery PWM normalizes.
+        // If recovery PWM <= 65% for >= 15 seconds continuously AND temp <= setpoint + 0.3C, restore Aux heater.
 
-        // Hysteresis recovery: Step back up progressively when water cools down
+        extern bool aux_heater_shed;
+        extern unsigned long rec_high_pwm_since;
+        extern unsigned long rec_low_pwm_since;
+
         if (in_softstart) {
-          if (current_power_stage < 3) {
-            current_power_stage = 3;
-            last_stage_switch_time = now;
-          }
-        } else if (now - last_stage_switch_time >= 5000) {
-          if (current_power_stage == 0 && temp1 <= temp_setpoint + 1.8f) {
-            current_power_stage = 1; // Step up to 2 kW
-            last_stage_switch_time = now;
-            btLog("Water cooling. Stepping up to Heaters Stage 1 (2 kW).");
-          } else if (current_power_stage == 1 && temp1 <= temp_setpoint + 1.0f) {
-            current_power_stage = 2; // Step up to 4 kW
-            last_stage_switch_time = now;
-            btLog("Water cooling. Stepping up to Heaters Stage 2 (4 kW).");
-          } else if (current_power_stage == 2 && temp1 <= temp_setpoint + 0.3f && !delivery_flow_restricted) {
-            current_power_stage = 3; // Step up to full 6 kW only if not hydraulically restricted
-            last_stage_switch_time = now;
-            btLog("Thermal & flow restriction cleared. Restoring Heaters Stage 3 (6 kW).");
+          aux_heater_shed = false;
+          rec_high_pwm_since = 0;
+          rec_low_pwm_since = 0;
+        } else {
+          if (sc_setperc[RPUMPR] >= 80.0f) {
+            rec_low_pwm_since = 0;
+            if (rec_high_pwm_since == 0) {
+              rec_high_pwm_since = now;
+            } else if (!aux_heater_shed && (now - rec_high_pwm_since >= 10000)) {
+              aux_heater_shed = true;
+              btLog("Recovery headroom exhausted (PWM >= 80% for 10s). Shedding Aux Heater -> 4 kW.");
+            }
+          } else if (sc_setperc[RPUMPR] <= 65.0f && temp1 <= temp_setpoint + 0.3f) {
+            rec_high_pwm_since = 0;
+            if (rec_low_pwm_since == 0) {
+              rec_low_pwm_since = now;
+            } else if (aux_heater_shed && (now - rec_low_pwm_since >= 15000)) {
+              aux_heater_shed = false;
+              btLog("Recovery headroom restored (PWM <= 65% for 15s). Restoring Aux Heater -> 6 kW.");
+            }
+          } else {
+            rec_high_pwm_since = 0;
+            rec_low_pwm_since = 0;
           }
         }
 
-        // Apply heater intents based on active power stage
-        switch (current_power_stage) {
-          case 3: // 6 kW (100%)
-            setrelay_en(RPHEATER, RON);
-            setrelay_en(RPHEATERA, RON);
-            break;
-          case 2: // 4 kW (66%)
-            setrelay_en(RPHEATER, RON);
-            setrelay_en(RPHEATERA, ROFF);
-            break;
-          case 1: // 2 kW (33%)
-            setrelay_en(RPHEATER, ROFF);
-            setrelay_en(RPHEATERA, RON);
-            break;
-          case 0: // 0 kW (0%)
-            setrelay_en(RPHEATER, ROFF);
-            setrelay_en(RPHEATERA, ROFF);
-            break;
-        }
+        // Apply heater intents based on headroom state
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, aux_heater_shed ? ROFF : RON);
 
         loop_tempcontrolwithspeed();
       }
@@ -547,11 +508,9 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 double tc_Kp = 0.25, tc_Ki = 0.01, tc_Kd = 0.0;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
-bool delivery_flow_restricted = false;
-unsigned long flow_restricted_since = 0;
-int current_power_stage = 3;
-static float flow_rec_smooth = 0.0f;
-static unsigned long last_delivery_calc_time = 0;
+bool aux_heater_shed = false;
+unsigned long rec_high_pwm_since = 0;
+unsigned long rec_low_pwm_since = 0;
 
 void setup_tempcontrolwithspeed(void)
 {
@@ -566,11 +525,9 @@ void setup_tempcontrolwithspeed(void)
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
-  last_delivery_calc_time = millis();
-  flow_rec_smooth = 0.0f;
-  delivery_flow_restricted = false;
-  flow_restricted_since = 0;
-  current_power_stage = 3;
+  aux_heater_shed = false;
+  rec_high_pwm_since = 0;
+  rec_low_pwm_since = 0;
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -580,17 +537,6 @@ void loop_tempcontrolwithspeed(void)
   myPID.Compute(); 
 
   unsigned long now = millis();
-  float dt = (now - last_delivery_calc_time) / 1000.0f;
-  if (dt <= 0.0f || dt > 1.0f) dt = 0.05f;
-  last_delivery_calc_time = now;
-
-  // Calibrated recovery flow in true delivery units
-  float rec_flow = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : (flow_lpm1 * flow_rec_scale);
-
-  // Exponential moving average filter for measured calibrated recovery flow (tau = 2.5s)
-  if (flow_rec_smooth <= 0.01f) flow_rec_smooth = rec_flow;
-  else flow_rec_smooth += (rec_flow - flow_rec_smooth) * (dt / 2.5f);
-
   float desired_flow = (float)tc_pidoutput;
 
   // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
@@ -599,44 +545,6 @@ void loop_tempcontrolwithspeed(void)
   if (in_softstart) {
     float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
     desired_flow = min(desired_flow, max_soft_ramp);
-    flow_rec_smooth = max(flow_rec_smooth, rec_flow); // Pre-seed smoothed recovery
-    delivery_flow_restricted = false;
-    flow_restricted_since = 0;
-  } else {
-    // 2. Steady-State Hydraulic Protection with Anti-Windup Clamping:
-    bool in_wash_cycle = (auto_state == STATE_WASH && auto_substate == WASH_CYCLE);
-    bool steady_state_ready = (in_wash_cycle && (now - auto_substatestime >= 15000)) || 
-                              (!in_wash_cycle && (now - wash_speed_start_time >= 20000));
-
-    float safe_delivery_cap = max(3.0f, flow_rec_smooth - 0.3f);
-
-    if (steady_state_ready && flow_rec_smooth > 1.0f) {
-      if (!delivery_flow_restricted) {
-        // Condition to ENGAGE clamp: Recovery pump saturated (PWM >= 80%) AND PID demands more than recovery capacity
-        if (sc_setperc[RPUMPR] >= 80.0f && desired_flow > safe_delivery_cap) {
-          delivery_flow_restricted = true;
-          flow_restricted_since = now;
-          btLog("Hydraulic Clamp Engaged: Recovery saturated (PWM >= 80%). Clamping delivery to " + String(safe_delivery_cap, 1) + " LPM.");
-        }
-      } else {
-        // Condition to RELEASE clamp: PID demand naturally falls within safe capacity AND temperature is controlled
-        // (Do NOT check recovery PWM to unclamp, as lowering delivery lowers recovery PWM by definition)
-        if ((float)tc_pidoutput <= safe_delivery_cap && temp1 <= temp_setpoint + 0.3f) {
-          delivery_flow_restricted = false;
-          flow_restricted_since = 0;
-          btLog("Hydraulic Clamp Released: PID demand within safe capacity.");
-        }
-      }
-
-      // While restricted, firmly clamp delivery flow to safe recovery capacity with PID anti-windup
-      if (delivery_flow_restricted) {
-        desired_flow = safe_delivery_cap;
-        tc_pidoutput = min((double)safe_delivery_cap, tc_pidoutput); // Anti-windup
-      }
-    } else {
-      delivery_flow_restricted = false;
-      flow_restricted_since = 0;
-    }
   }
 
   // Constrain between absolute operating bounds [3.0, 8.5] LPM
