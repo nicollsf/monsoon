@@ -505,7 +505,7 @@ void loop_tempcontrolwithheater(void)
 // ----------------------------------------------------------------------
 #include <PID_v1.h>
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-double tc_Kp = 0.25, tc_Ki = 0.01, tc_Kd = 0.0;
+double tc_Kp = 1.0, tc_Ki = 0.004, tc_Kd = 0.8;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 bool aux_heater_shed = false;
