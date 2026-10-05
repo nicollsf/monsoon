@@ -51,6 +51,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **Heaters (Dual Asymmetric Elements - 6 kW Total):**
   * **Main Heater (`RPHEATER` = 4 on GPIO 13):** **4 kW** geyser element (66.7% power).
   * **Auxiliary Heater (`RPHEATERA` = 3 on GPIO 4):** **2 kW** kettle element (33.3% power).
+  * **Auxiliary SSR Control (`SSR_AUX_PIN` = GPIO 33 / D33):** Solid-State Relay (Fotek/HKD SSR-40DA) in series with mechanical relay `RPHEATERA` for Slow-PWM burst fire duty modulation (1000ms window timebase). Gated by `safety_veto` and `RPHEATERA` relay state. Currently set to 100% duty (`ssr_aux_duty = 1.0f`) for baseline testing.
   * **Empirical Thermal Capacity:** $\sim 1\text{ kW}$ per $1\text{ LPM}$ flow ($\text{4 kW} \approx 4\text{--}5\text{ LPM}$, $\text{6 kW} \approx 6\text{--}7\text{ LPM}$).
   * **Multi-Stage Power Ladder:**
     * Stage 3 (100% / 6 kW): Main ON, Aux ON (Default full-power operation).

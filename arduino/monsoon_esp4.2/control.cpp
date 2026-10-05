@@ -20,6 +20,32 @@ float htrs_maxtemp = 62.5;
 bool pump_safety_veto = false; // Veto for recovery pump due to tank full
 bool inlet_safety_veto = false; // Veto for inlet valve due to tank full
 
+float ssr_aux_duty = 1.0f; // Aux SSR duty cycle: 0.0f (0%) to 1.0f (100%)
+
+void loop_ssr_control(void)
+{
+  static unsigned long ssr_window_start = 0;
+  unsigned long now = millis();
+  const unsigned long SSR_WINDOW_MS = 1000;
+
+  if (now - ssr_window_start >= SSR_WINDOW_MS) {
+    ssr_window_start = now;
+  }
+
+  bool temp_safe = (temp1 <= htrs_maxtemp);
+  bool level_safe = !tank_empty;
+  bool safety_safe = htrs_enable && !htrs_forcedisable && level_safe && temp_safe;
+  bool aux_relay_on = (getrelay(RPHEATERA) == RON);
+
+  unsigned long on_duration = (unsigned long)(constrain(ssr_aux_duty, 0.0f, 1.0f) * SSR_WINDOW_MS);
+
+  if (aux_relay_on && safety_safe && (now - ssr_window_start < on_duration) && on_duration > 0) {
+    digitalWrite(SSR_AUX_PIN, HIGH);
+  } else {
+    digitalWrite(SSR_AUX_PIN, LOW);
+  }
+}
+
 void loop_heaters(void)
 {
   htrs_changed = 0;
@@ -41,6 +67,7 @@ void loop_heaters(void)
 
   // Force heaters off immediately if disabled or unsafe (Safety cut-out bypasses the lockout)
   if( !htrs_enable || htrs_forcedisable || !level_safe || !temp_safe ) {
+    digitalWrite(SSR_AUX_PIN, LOW);
     if( getrelay(RPHEATER)==RON || getrelay(RPHEATERA)==RON ) {
       String reason = "Safety Cutout: Heaters forced OFF because: ";
       if (!htrs_enable) reason += "[Not enabled by state] ";
@@ -60,6 +87,7 @@ void loop_heaters(void)
 
   // Wait for both level confirmation debounce and relay anti-chatter lockout
   if (!level_confirmed_safe || (millis() - last_heater_switch_time < 3000)) {
+    loop_ssr_control();
     return;
   }
 
@@ -85,6 +113,8 @@ void loop_heaters(void)
   if (changed) {
     last_heater_switch_time = millis();
   }
+
+  loop_ssr_control();
 
   return;
 }

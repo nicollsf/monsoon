@@ -33,6 +33,10 @@ void setup_pins()
   rpinsen_reset();
   rpins_changed = 0;
 
+  // SSR for Aux Heater
+  pinMode(SSR_AUX_PIN, OUTPUT);
+  digitalWrite(SSR_AUX_PIN, LOW);
+
   // Digital inputs for flow sensors (Pins 36, 39 are input-only, no internal pull-ups)
   for( int i=0; i<2; i++ ) pinMode(FSPINS[i], INPUT);
 

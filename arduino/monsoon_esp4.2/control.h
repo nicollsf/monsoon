@@ -58,7 +58,9 @@ extern int htrs_enable;
 extern int htrs_changed;
 extern bool pump_safety_veto;
 extern bool inlet_safety_veto;
+extern float ssr_aux_duty; // Aux SSR duty cycle: 0.0f (0%) to 1.0f (100%)
 void loop_heaters(void);
+void loop_ssr_control(void);
 void loop_pumps_and_valves(void);
 
 
