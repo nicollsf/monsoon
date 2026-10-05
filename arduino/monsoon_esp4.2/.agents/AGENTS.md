@@ -93,9 +93,10 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 ## 7. Key State Machine & Flow Rules
 
 * **`STATE_FILL`:**
-  * `FILL_PREPARE`: Delivery flow set to 40% with top-up enabled to stabilize flow.
+  * `FILL_PREPARE`: Delivery flow set to 40% with top-up enabled to stabilize flow (12.5s top-up timeout and repeat guard).
   * `FILL_OVERFILL_PUMP`: Calibrated 8.0 LPM flow limit via `setpump_lpm(RPUMPD, 8.0f)` while recovery is OFF.
 * **`STATE_WARM` (Two-Stage Preheating Pipeline):**
+  * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`). Closed-loop scavenge handles all normal tank level replenishment without cold mains water intrusion; if level is lost for 120s, top-up fires 2s pulses every 30s until `tank_full` is recovered.
   * **`WARM_RAMP` (Fast Heat-Up):**
     * Continuous forced convection at $\sim 3.5\text{--}3.8\text{ LPM}$ with full $6\text{ kW}$ power (Main 4kW + Aux 2kW).
     * Delivers a linear heating rate of $\sim +4.9^\circ\text{C/min}$ (reaching setpoint in $\sim 5\text{ min}$ from cold) with zero sensor lag or false thermal trips.
@@ -105,6 +106,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Dynamically modulates asymmetric heating stages ($0\text{ kW} / 2\text{ kW} / 4\text{ kW} / 6\text{ kW}$) using tight hysteresis around setpoint.
     * Holds water equilibrium within $\pm 0.5^\circ\text{C}$ indefinitely at $\sim 1.9\text{ kW}$ maintenance power until the user manually triggers `WASH`.
 * **`STATE_WASH` (Shower):**
+  * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM.
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.5\text{ LPM}$.

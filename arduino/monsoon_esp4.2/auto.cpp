@@ -83,6 +83,7 @@ void loop_autowoverflowopen(void)
 
 // Auto topup working tank
 int auto_wtopupenable = 0;
+unsigned long auto_wtopup_timeout = 10000;
 unsigned long auto_wtopup_interval = 10000;
 unsigned long auto_wtopupopenstime = 0;
 unsigned long auto_wtopuplasthightime = 0;
@@ -116,10 +117,10 @@ void loop_autowtopup(void)
     }
   }
 
-  if( millis()-auto_wtopupopenstime<auto_wtopup_interval ) return;  // limit frequency
+  if( millis()-auto_wtopupopenstime<auto_wtopup_interval ) return;  // limit repeat frequency (guard)
 
   // Open inlet if it's been too long since tank was high AND we are trying to recover
-  if( !tank_full && (millis() - auto_wtopuplasthightime > auto_wtopup_interval) ) {
+  if( !tank_full && (millis() - auto_wtopuplasthightime > auto_wtopup_timeout) ) {
     if( getpump_en(RPUMPR) == RON && getrelay_en(RPINLET) == ROFF ) {
       if( auto_state == STATE_WASH ) {
         auto_wtopup_count++;
@@ -430,6 +431,8 @@ void loop_autofill(void)
         setpump_en(RPUMPR, RON);
         setpump_en(RPUMPD, RON);
         auto_wtopupenable = 1;
+        auto_wtopup_timeout = 12500; // 12.5s topup timeout
+        auto_wtopup_interval = 12500; // 12.5s repeat guard
       }
       
       // Wait for the tank to be full AND for flow to be stable for 20s.
@@ -532,7 +535,9 @@ void loop_autowarm(void)
       if( just_entered ) {
         btLog("Entering WARM: Preparing shower circulation.");
         temp_controlmode = TCNONE; // loop_autowarm manages staged heaters directly
-        auto_wtopupenable = 1; // Keep tank full
+        auto_wtopupenable = 1; // Keep tank full as safety fallback only
+        auto_wtopup_timeout = 120000; // 120s safety fallback timeout (closed-loop scavenge handles replenishment)
+        auto_wtopup_interval = 30000; // 30s repeat guard once active
         auto_woverflowstopenable = 0; // Use smooth closed-loop scavenge control without hard cycling
         auto_scavengecontrolenable = 1; // Dynamic recovery delta tracking active
       }
@@ -626,7 +631,9 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
         temp_controlmode = TCSPEED;
-        auto_wtopupenable = 0; // Never enable auto topup during wash
+        auto_wtopupenable = 1; // Safety fallback
+        auto_wtopup_timeout = 120000; // 120s safety fallback timeout (recovery pump handles closed-loop replenishment)
+        auto_wtopup_interval = 30000; // 30s repeat guard once active
       }
       auto_switchsubstate(WASH_SOFTSTART);
       break;
@@ -1303,7 +1310,8 @@ void auto_switchstate(int state, String reason)
   // Disable auto circuits
   auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
   auto_scavenge_integral = 0.0f;
-  auto_wtopup_interval = 10000; // Reset topup interval to default
+  auto_wtopup_timeout = 10000;  // Reset topup timeout to default
+  auto_wtopup_interval = 10000; // Reset topup repeat guard to default
 }
 
 void auto_advancestate(void) 

@@ -32,6 +32,7 @@ extern unsigned long auto_statestime, auto_substatestime;
 
 // Circuits
 extern int auto_wtopupenable;//, auto_rtopupenable;
+extern unsigned long auto_wtopup_timeout;
 extern unsigned long auto_wtopup_interval;
 extern int auto_woverflowstopenable;
 extern int auto_scavengecontrolenable;
