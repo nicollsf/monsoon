@@ -107,18 +107,18 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Holds water equilibrium within $\pm 0.5^\circ\text{C}$ indefinitely at $\sim 1.9\text{ kW}$ maintenance power until the user manually triggers `WASH`.
 * **`STATE_WASH` (Shower):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
-  * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM.
+  * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
+  * **Aux SSR Power Supervisor (`loop_aux_power_supervisor`):** Evaluated every **10 seconds** (slow timebase) with deadband between $55\%$ and $75\%$ recovery PWM:
+    * Temp $\ge \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Trim `ssr_aux_duty` by $-15\%$.
+    * Recovery PWM $\ge 85\% \rightarrow$ Trim `ssr_aux_duty` by $-20\%$.
+    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_aux_duty` by $-10\%$.
+    * Recovery PWM $\le 55\%$ and Temp $\le \text{setpoint} + 0.2^\circ\text{C} \rightarrow$ Gently restore `ssr_aux_duty` by $+5\%$.
+    * Deadband $55\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.5\text{ LPM}$.
     * While `!tank_full`: Delta steadily ramps at $+0.02\text{ LPM/sec}$ ($+1.2\text{ LPM/min}$, capped at $+4.5\text{ LPM}$) to progressively clear any pan pooling.
     * When `tank_full`: Delta immediately snaps to $0.0\text{ LPM}$ to instantly match delivery flow, holding full-tank equilibrium without overflowing or pump chopping.
     * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
-  * **Hydraulic Protection (After 20s in WASH_CYCLE):** If recovery flow is genuinely constrained ($< 6.5\text{ LPM}$), delivery is capped at $\text{flow\_rec\_smooth} - 0.5\text{ LPM}$ (floor 3.0 LPM).
-  * **Staged Thermal Override:** If delivery flow is restricted for $\ge 10\text{s}$ and temperature exceeds setpoint:
-    * Temp $> \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Stage 2 (4 kW: Main ON, Aux OFF).
-    * Temp $> \text{setpoint} + 1.8^\circ\text{C} \rightarrow$ Stage 1 (2 kW: Main OFF, Aux ON).
-    * Temp $> \text{setpoint} + 2.5^\circ\text{C} \rightarrow$ Stage 0 (0 kW: Both OFF).
-    * Hysteresis step-up back to Stage 3 (6 kW) when temp $\le \text{setpoint} + 0.3^\circ\text{C}$ or flow restriction clears.
 * **Flow & Temperature Sensor Filtering:**
   * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.
   * 9-sample ADC median filter in `get_tempsens1()`.

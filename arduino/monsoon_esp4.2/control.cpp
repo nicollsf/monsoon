@@ -449,49 +449,11 @@ void loop_tempcontrol(void)
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        unsigned long now = millis();
-        bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
+        loop_aux_power_supervisor();
 
-        // Auxiliary Heater Headroom Management:
-        // Main heater (4kW, RPHEATER) + Aux heater (2kW, RPHEATERA) = 6kW total.
-        // If recovery PWM >= 80% for >= 10 seconds continuously, shed Aux heater (power drops to 4kW).
-        // Power reduction drops water temp gently, PID naturally slows delivery flow, and recovery PWM normalizes.
-        // If recovery PWM <= 65% for >= 15 seconds continuously AND temp <= setpoint + 0.3C, restore Aux heater.
-
-        extern bool aux_heater_shed;
-        extern unsigned long rec_high_pwm_since;
-        extern unsigned long rec_low_pwm_since;
-
-        if (in_softstart) {
-          aux_heater_shed = false;
-          rec_high_pwm_since = 0;
-          rec_low_pwm_since = 0;
-        } else {
-          if (sc_setperc[RPUMPR] >= 80.0f) {
-            rec_low_pwm_since = 0;
-            if (rec_high_pwm_since == 0) {
-              rec_high_pwm_since = now;
-            } else if (!aux_heater_shed && (now - rec_high_pwm_since >= 10000)) {
-              aux_heater_shed = true;
-              btLog("Recovery headroom exhausted (PWM >= 80% for 10s). Shedding Aux Heater -> 4 kW.");
-            }
-          } else if (sc_setperc[RPUMPR] <= 65.0f && temp1 <= temp_setpoint + 0.3f) {
-            rec_high_pwm_since = 0;
-            if (rec_low_pwm_since == 0) {
-              rec_low_pwm_since = now;
-            } else if (aux_heater_shed && (now - rec_low_pwm_since >= 15000)) {
-              aux_heater_shed = false;
-              btLog("Recovery headroom restored (PWM <= 65% for 15s). Restoring Aux Heater -> 6 kW.");
-            }
-          } else {
-            rec_high_pwm_since = 0;
-            rec_low_pwm_since = 0;
-          }
-        }
-
-        // Apply heater intents based on headroom state
+        // Main heater (4kW) is ON. Aux relay (2kW) is ON if duty > 0 (modulated by SSR slow-PWM)
         setrelay_en(RPHEATER, RON);
-        setrelay_en(RPHEATERA, aux_heater_shed ? ROFF : RON);
+        setrelay_en(RPHEATERA, (ssr_aux_duty > 0.01f) ? RON : ROFF);
 
         loop_tempcontrolwithspeed();
       }
@@ -538,9 +500,52 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 double tc_Kp = 1.0, tc_Ki = 0.004, tc_Kd = 0.8;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
-bool aux_heater_shed = false;
-unsigned long rec_high_pwm_since = 0;
-unsigned long rec_low_pwm_since = 0;
+void loop_aux_power_supervisor(void)
+{
+  static unsigned long last_eval = 0;
+  unsigned long now = millis();
+
+  bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
+  if (in_softstart) {
+    ssr_aux_duty = 1.0f; // Start with full 100% power during softstart
+    last_eval = now;
+    return;
+  }
+
+  // 10-second slow supervisory timebase (bandwidth separation from 1.5s flow PID)
+  if (now - last_eval < 10000) return;
+  last_eval = now;
+
+  float rec_pwm = sc_setperc[RPUMPR];
+  float prev_duty = ssr_aux_duty;
+
+  if (temp1 >= temp_setpoint + 1.0f) {
+    // Over-temperature guard: step down Aux SSR duty by 15%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.15f);
+    if (ssr_aux_duty != prev_duty) {
+      btLog("Overtemp (T > Setpoint + 1.0C): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+    }
+  } else if (rec_pwm >= 85.0f) {
+    // Critical headroom limit: step down Aux SSR duty by 20%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.20f);
+    if (ssr_aux_duty != prev_duty) {
+      btLog("Headroom critical (Rec PWM >= 85%): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+    }
+  } else if (rec_pwm >= 75.0f) {
+    // Approaching headroom limit: gently step down Aux SSR duty by 10%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.10f);
+    if (ssr_aux_duty != prev_duty) {
+      btLog("Headroom approaching (Rec PWM >= 75%): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+    }
+  } else if (rec_pwm <= 55.0f && temp1 <= temp_setpoint + 0.2f) {
+    // Ample recovery headroom & temp not hot: gently step up Aux SSR duty by 5%
+    ssr_aux_duty = min(1.0f, ssr_aux_duty + 0.05f);
+    if (ssr_aux_duty != prev_duty) {
+      btLog("Ample headroom (Rec PWM <= 55%): Restore Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+    }
+  }
+  // Between 55% and 75% PWM: Deadband (duty is frozen, zero loop interaction)
+}
 
 void setup_tempcontrolwithspeed(void)
 {
@@ -555,9 +560,7 @@ void setup_tempcontrolwithspeed(void)
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
-  aux_heater_shed = false;
-  rec_high_pwm_since = 0;
-  rec_low_pwm_since = 0;
+  ssr_aux_duty = 1.0f; // Initialize Aux SSR to 100% full power
 }
 
 void loop_tempcontrolwithspeed(void)
