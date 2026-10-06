@@ -188,6 +188,19 @@ void serialcmd(char cmd)
     save_temp_setpoint();
   }
 
+  // Auxiliary SSR heater duty cycle nudge
+  if ( cmd == 'D' || cmd == 'd' ) {
+    if ( cmd == 'D' ) {
+      ssr_aux_duty += 0.05f;
+    } else {
+      ssr_aux_duty -= 0.05f;
+    }
+    if ( ssr_aux_duty > 1.0f ) ssr_aux_duty = 1.0f;
+    if ( ssr_aux_duty < 0.0f ) ssr_aux_duty = 0.0f;
+    btLog("Aux SSR duty: " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "%");
+    report_tsvals();
+  }
+
   // Enter next state
   if ( cmd == 'Y') {
     btLog("Advancing to state " + String(auto_statestrs[auto_nextstate]));
@@ -283,29 +296,29 @@ void report_valve_status(void)
 }
 
 
-// Report temperature
+// Report temperature & heater status
 unsigned long tsvals_lastreport = 0;
 unsigned long tsvals_period = 1000;
 unsigned long tsready_lastbeep = 0;
 unsigned long tsready_beepperiod = 10000;
 void report_tsvals()
 {
+  float main_kw = (getrelay(RPHEATER) == RON) ? 4.0f : 0.0f;
+  float aux_kw = (getrelay(RPHEATERA) == RON) ? (2.0f * constrain(ssr_aux_duty, 0.0f, 1.0f)) : 0.0f;
+  float total_kw = main_kw + aux_kw;
+  float bte_htr_level = 40.0f + (total_kw / 6.0f) * 20.0f; // Scale 0..6 kW to 40..60°C for BTE single-axis graph
+  int aux_duty_pct = (int)(ssr_aux_duty * 100.0f + 0.5f);
+
   String mstr = "*M";
-  //mstr += String(temp0) + "," + String(temp1) + "*";
-  mstr += String(temp) + "*";
-  btSerial.println(mstr);  //Serial.println(mstr);
+  mstr += String(temp, 1) + "," + String(bte_htr_level, 1) + "," + String(total_kw, 2) + "," + String(aux_duty_pct) + "*";
+  btSerial.println(mstr);
+
+  mstr = "*W" + String(aux_duty_pct) + "*";
+  btSerial.println(mstr);
 
   mstr = "*t";
   mstr += String(temp_setpoint) + "*";
   btSerial.println(mstr);
-
- //if( auto_state==STATE_WARM && temp0>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
- //if( temp>temp_setpoint && millis()-tsready_lastbeep>=tsready_beepperiod ) {
- //  Serial.println("temp,temp_setpoint=" + String(temp) + "," + String(temp_setpoint));
- //  mstr = "*S*";
- //  btSerial.println(mstr);
- //  tsready_lastbeep = millis();
- //}
 
   tsvals_lastreport = millis();
 }

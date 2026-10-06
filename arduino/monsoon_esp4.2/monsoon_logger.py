@@ -60,6 +60,8 @@ telemetry_data = {
     "deliver_act": "0",
     "heaterA_act": "0",
     "heater_act": "0",
+    "aux_duty": "100",
+    "htr_total_kw": "0.0",
     "pump_relay_act": "0",
     "burp_act": "0"
 }
@@ -100,8 +102,17 @@ def parse_telemetry(payload):
         tag = token[0]
         val = token[1:]
         
-        if tag == 'M': # Temperature (*M37.5*)
-            telemetry_data["temp"] = val
+        if tag == 'M': # Temperature (*M37.5* or *M37.5,45.0,4.0,100*)
+            m_parts = val.split(',')
+            if len(m_parts) >= 1:
+                telemetry_data["temp"] = m_parts[0].strip()
+            if len(m_parts) >= 3:
+                telemetry_data["htr_total_kw"] = m_parts[2].strip()
+            if len(m_parts) >= 4:
+                telemetry_data["aux_duty"] = m_parts[3].strip()
+            updated = True
+        elif tag == 'W': # Aux SSR duty % (*W100*)
+            telemetry_data["aux_duty"] = val.strip()
             updated = True
         elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
@@ -230,7 +241,7 @@ def on_message(client, userdata, msg):
                         "Filter_Yield", "Pressure", 
                         "Tank_Empty", "Tank_Full", 
                         "Inlet", "Drain", "Deliver", 
-                        "Htr_Main", "Htr_Aux", 
+                        "Htr_Main", "Htr_Aux", "Htr_Aux_Duty", "Htr_Total_kW",
                         "Ball_Valve", "Burp"
                     ])
                 except Exception as e:
@@ -278,6 +289,8 @@ def on_message(client, userdata, msg):
                         telemetry_data["deliver_act"],
                         telemetry_data["heater_act"],
                         telemetry_data["heaterA_act"],
+                        telemetry_data.get("aux_duty", "100"),
+                        telemetry_data.get("htr_total_kw", "0.0"),
                         telemetry_data["ball_valve"],
                         telemetry_data["burp_act"]
                     ])

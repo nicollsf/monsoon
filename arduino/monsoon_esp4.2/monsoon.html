@@ -158,6 +158,50 @@
         </div>
       </div>
 
+      <!-- Aux Heater SSR Duty Tuning -->
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
+        <div class="flex items-center justify-between border-b border-gray-800 pb-2">
+          <h2 class="text-md font-semibold text-gray-300">AUX HEATER (2 kW SSR)</h2>
+          <span class="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Duty &plusmn;5%</span>
+        </div>
+
+        <div class="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs text-gray-400 font-medium">Aux Element Duty (D/d)</div>
+              <div class="text-xl font-bold text-amber-400"><span id="aux-duty-val">100</span>% <span id="aux-kw-val" class="text-xs text-gray-500 font-normal">(2.0 kW)</span></div>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="sendCommand('d')" title="Decrease Aux Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">-5%</button>
+              <button onclick="sendCommand('D')" title="Increase Aux Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">+5%</button>
+            </div>
+          </div>
+
+          <!-- Slider -->
+          <div class="space-y-1">
+            <input type="range" id="aux-duty-slider" min="0" max="100" step="5" value="100"
+              oninput="document.getElementById('aux-duty-val').innerText = this.value; document.getElementById('aux-kw-val').innerText = '(' + (2.0 * this.value / 100).toFixed(1) + ' kW)';"
+              onchange="sendCommand('d' + this.value)"
+              class="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-amber-500">
+            <div class="flex justify-between text-[10px] text-gray-500 font-mono">
+              <span>0% (OFF)</span>
+              <span>25%</span>
+              <span>50% (1kW)</span>
+              <span>75%</span>
+              <span>100% (2kW)</span>
+            </div>
+          </div>
+
+          <!-- Quick Presets -->
+          <div class="grid grid-cols-4 gap-1.5 pt-1">
+            <button onclick="setAuxDuty(0)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">0%</button>
+            <button onclick="setAuxDuty(33)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">33%</button>
+            <button onclick="setAuxDuty(66)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">66%</button>
+            <button onclick="setAuxDuty(100)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">100%</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Manual Relays & Valves Switches -->
       <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
         <h2 class="text-md font-semibold text-gray-300 border-b border-gray-800 pb-2">MANUAL RELAYS &amp; VALVES</h2>
@@ -249,6 +293,9 @@
           <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Temperature</span>
           <span id="temp-val" class="text-3xl font-extrabold text-white">--.-</span>
           <span class="text-gray-400 font-semibold">&deg;C</span>
+          <div class="mt-1.5 text-[11px] text-gray-500 font-medium">
+            Power: <span id="htr-total-kw-val" class="text-amber-400 font-bold">--</span> kW
+          </div>
         </div>
         <!-- Del Flow -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
@@ -341,15 +388,30 @@
       type: 'line',
       data: {
         labels: [],
-        datasets: [{
-          label: 'Temperature (°C)',
-          data: [],
-          borderColor: '#22d3ee',
-          backgroundColor: 'rgba(34, 211, 238, 0.1)',
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: true
-        }]
+        datasets: [
+          {
+            label: 'Temp (°C)',
+            yAxisID: 'y',
+            data: [],
+            borderColor: '#22d3ee',
+            backgroundColor: 'rgba(34, 211, 238, 0.1)',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: true
+          },
+          {
+            label: 'Power (kW)',
+            yAxisID: 'y1',
+            data: [],
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            borderWidth: 2,
+            borderDash: [3, 3],
+            stepped: true,
+            pointRadius: 0,
+            fill: false
+          }
+        ]
       },
       options: {
         responsive: true,
@@ -360,10 +422,24 @@
             min: 20,
             max: 60,
             grid: { color: '#1f2937' }, 
-            ticks: { color: '#9ca3af' } 
+            ticks: { color: '#22d3ee' },
+            title: { display: true, text: '°C', color: '#22d3ee', font: { size: 10 } }
+          },
+          y1: {
+            position: 'right',
+            min: 0,
+            max: 6,
+            grid: { drawOnChartArea: false },
+            ticks: { color: '#f59e0b', stepSize: 1 },
+            title: { display: true, text: 'kW', color: '#f59e0b', font: { size: 10 } }
           }
         },
-        plugins: { legend: { display: false } }
+        plugins: {
+          legend: {
+            display: true,
+            labels: { color: '#9ca3af', boxWidth: 10 }
+          }
+        }
       }
     });
 
@@ -648,11 +724,34 @@
       const data = content.slice(1);
 
       switch (type) {
-        case 'M': // Temperature rolling data
-          const temp = parseFloat(data);
+        case 'M': // Temperature & Power rolling data (*M37.5,45.0,4.0,100*)
+          const mParts = data.split(',');
+          const temp = parseFloat(mParts[0]);
+          let totalKw = NaN;
+          if (mParts.length >= 3) {
+            totalKw = parseFloat(mParts[2]);
+          }
           if (!isNaN(temp)) {
             document.getElementById('temp-val').innerText = temp.toFixed(1);
             addChartData(tempChart, '', 0, temp);
+            if (!isNaN(totalKw)) {
+              addChartData(tempChart, '', 1, totalKw);
+              const kwEl = document.getElementById('htr-total-kw-val');
+              if (kwEl) kwEl.innerText = totalKw.toFixed(1);
+            }
+          }
+          if (mParts.length >= 4) {
+            const auxPct = parseInt(mParts[3]);
+            if (!isNaN(auxPct)) {
+              updateAuxDutyUI(auxPct);
+            }
+          }
+          break;
+
+        case 'W': // Aux SSR Duty Percentage (*W100*)
+          const auxDuty = parseInt(data);
+          if (!isNaN(auxDuty)) {
+            updateAuxDutyUI(auxDuty);
           }
           break;
 
@@ -934,6 +1033,21 @@
       }
       appendLog("<span class='text-amber-400 font-semibold'>OTA Update initiated: downloading firmware and writing to flash (~15s)...</span>");
       sendCommand('O');
+    }
+
+    // Aux Heater SSR Duty Helpers
+    function setAuxDuty(val) {
+      sendCommand('d' + val);
+      updateAuxDutyUI(val);
+    }
+
+    function updateAuxDutyUI(pct) {
+      const valEl = document.getElementById('aux-duty-val');
+      const kwEl = document.getElementById('aux-kw-val');
+      const slider = document.getElementById('aux-duty-slider');
+      if (valEl) valEl.innerText = pct;
+      if (kwEl) kwEl.innerText = '(' + (2.0 * pct / 100.0).toFixed(1) + ' kW)';
+      if (slider && document.activeElement !== slider) slider.value = pct;
     }
 
     // Outbound Command Emitter

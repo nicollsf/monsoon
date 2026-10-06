@@ -78,6 +78,22 @@ def deploy_to_pi(new_version):
     if scp_html_result.returncode != 0:
         print("Warning: scp upload of monsoon.html failed.")
 
+    # Upload Keuwl Panel file
+    print("Uploading Keuwl_Panel_0019.kwl to Pi...")
+    subprocess.run([
+        "scp",
+        "Keuwl_Panel_0019.kwl",
+        f"{PI_USER_IP}:/var/www/html/Keuwl_Panel_0019.kwl"
+    ])
+
+    # Upload monsoon_logger.py to Pi home directory
+    print("Uploading monsoon_logger.py to Pi...")
+    subprocess.run([
+        "scp",
+        "monsoon_logger.py",
+        f"{PI_USER_IP}:/home/nicolls/monsoon/monsoon_logger.py"
+    ])
+
     # Generate and upload monsoon.json configuration file
     print("Uploading monsoon.json configuration to the Pi...")
     json_data = {

@@ -67,6 +67,16 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   else if( srecv=="marco" ) {
     mqtt_publish("polo");
   }
+  else if( srecv.startsWith("d") && srecv.length() > 1 ) {
+    int duty_pct = srecv.substring(1).toInt();
+    if (duty_pct < 0) duty_pct = 0;
+    if (duty_pct > 100) duty_pct = 100;
+    extern float ssr_aux_duty;
+    ssr_aux_duty = (float)duty_pct / 100.0f;
+    mqtt_log("Set Aux SSR duty to " + String(duty_pct) + "%");
+    extern void report_tsvals(void);
+    report_tsvals();
+  }
   else if( length == 1 ) {
     extern void serialcmd(char cmd);
     serialcmd(srecv[0]);
