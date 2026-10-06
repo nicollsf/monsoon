@@ -246,31 +246,28 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // TCP AIMD Scavenge Level Probing with Progressive Back-Off (~25s target period):
+  // TCP AIMD Scavenge Level Probing with Smooth Back-Off:
   // 1. Congestion Signal (Top float switch triggered -> tank is 100% full):
-  //    - Instantly step delta to negative (-0.35 LPM) to stop filling.
-  //    - If tank_full PERSISTS, progressively decrease delta (-0.01 LPM per 500ms / -0.02 LPM/sec)
-  //      down to -1.5 LPM to guarantee the level drops even under severe flow miscalibration.
+  //    - Softly step delta to negative (-0.15 LPM) to halt accumulation.
+  //    - If tank_full persists, gently decrease delta down to -0.40 LPM.
   //    - Reset positive integral windup immediately.
   // 2. Post-Full Headroom Recovery:
-  //    - When tank_full clears, initialize delta at -0.12 LPM so the level safely settles ~15mm below the switch.
+  //    - When tank_full clears, initialize delta at -0.08 LPM.
   // 3. Additive Increase:
-  //    - Gently ramp delta up (+0.004 LPM per 500ms = +0.008 LPM/sec = +0.48 LPM/min, capped at +1.0 LPM)
-  //      giving ~16-18s in the off-state before gently probing the top switch again (total cycle ~25s).
+  //    - Gently ramp delta up (+0.002 LPM per 500ms, capped at +0.30 LPM) for smooth pan tracking without PWM surging.
   if (tank_full) {
     scavenge_tank_full_last_time = now;
-    if (scavenge_delta_lpm > -0.35f) {
-      scavenge_delta_lpm = -0.35f; // Initial step back-off
+    if (scavenge_delta_lpm > -0.15f) {
+      scavenge_delta_lpm = -0.15f; // Soft step back-off
     } else {
-      scavenge_delta_lpm = max(-1.5f, scavenge_delta_lpm - 0.01f); // Progressive decrease if still full
+      scavenge_delta_lpm = max(-0.40f, scavenge_delta_lpm - 0.005f);
     }
     if (auto_scavenge_integral > 0.0f) auto_scavenge_integral = 0.0f;
   } else if (flow_lpm0 >= 1.0f) {
-    // When clearing tank_full, begin ramp from -0.12 LPM to give ~15-18s clearance
-    if (scavenge_delta_lpm < -0.12f) {
-      scavenge_delta_lpm = -0.12f;
+    if (scavenge_delta_lpm < -0.08f) {
+      scavenge_delta_lpm = -0.08f;
     }
-    scavenge_delta_lpm = min(1.0f, scavenge_delta_lpm + 0.004f); // Additive Increase
+    scavenge_delta_lpm = min(0.30f, scavenge_delta_lpm + 0.002f); // Additive Increase
   } else {
     scavenge_delta_lpm = 0.2f;
     auto_scavenge_integral = 0.0f;

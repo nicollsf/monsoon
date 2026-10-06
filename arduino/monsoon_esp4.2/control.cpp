@@ -512,39 +512,41 @@ void loop_aux_power_supervisor(void)
     return;
   }
 
-  // 10-second slow supervisory timebase (bandwidth separation from 1.5s flow PID)
-  if (now - last_eval < 10000) return;
+  // 30-second slow supervisory timebase (aligned with 30-60s physical thermal time constant)
+  if (now - last_eval < 30000) return;
   last_eval = now;
 
   float rec_pwm = sc_setperc[RPUMPR];
   float prev_duty = ssr_aux_duty;
 
   if (temp1 >= temp_setpoint + 1.0f) {
-    // Over-temperature guard: step down Aux SSR duty by 15%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.15f);
+    // Over-temperature guard: gently trim Aux SSR duty by 5%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.05f);
     if (ssr_aux_duty != prev_duty) {
-      btLog("Overtemp (T > Setpoint + 1.0C): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+      btLog("Overtemp (T > SP+1.0C): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
     }
   } else if (rec_pwm >= 85.0f) {
-    // Critical headroom limit: step down Aux SSR duty by 20%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.20f);
+    // Critical headroom limit: trim Aux SSR duty by 5%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.05f);
     if (ssr_aux_duty != prev_duty) {
-      btLog("Headroom critical (Rec PWM >= 85%): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+      btLog("Headroom critical (Rec >= 85%): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
     }
   } else if (rec_pwm >= 75.0f) {
-    // Approaching headroom limit: gently step down Aux SSR duty by 10%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.10f);
+    // Approaching headroom limit: gently trim Aux SSR duty by 3%
+    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.03f);
     if (ssr_aux_duty != prev_duty) {
-      btLog("Headroom approaching (Rec PWM >= 75%): Trim Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+      btLog("Headroom approaching (Rec >= 75%): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
     }
-  } else if (rec_pwm <= 55.0f && temp1 <= temp_setpoint + 0.2f) {
-    // Ample recovery headroom & temp not hot: gently step up Aux SSR duty by 5%
-    ssr_aux_duty = min(1.0f, ssr_aux_duty + 0.05f);
-    if (ssr_aux_duty != prev_duty) {
-      btLog("Ample headroom (Rec PWM <= 55%): Restore Aux SSR to " + String(ssr_aux_duty * 100.0f, 0) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+  } else if (rec_pwm <= 70.0f && temp1 <= temp_setpoint + 0.4f) {
+    // Safe headroom & temp stable: gently creep Aux SSR duty back up (+3% per 30s)
+    if (ssr_aux_duty < 1.0f) {
+      ssr_aux_duty = min(1.0f, ssr_aux_duty + 0.03f);
+      if (ssr_aux_duty != prev_duty) {
+        btLog("Headroom clear (Rec <= 70%): Creep Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+      }
     }
   }
-  // Between 55% and 75% PWM: Deadband (duty is frozen, zero loop interaction)
+  // Deadband between 70% and 75% Rec PWM: duty is held constant
 }
 
 void setup_tempcontrolwithspeed(void)
