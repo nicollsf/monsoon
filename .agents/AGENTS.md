@@ -1,12 +1,13 @@
 # Project Rules: Monsoon (ESP32 Recirculating Shower)
 
-Goal: Transitioning from Arduino IDE to PlatformIO while maintaining interchangeable compatibility.
+Goal: Maintain interchangeable compatibility across Arduino IDE and PlatformIO for the Monsoon recirculating shower system.
 
 ## 1. Directory & Scoping Rules
 
-* **Active Code:** Located strictly in the project root directory (`.`).
-* **Excluded Folders:** Ignore `attic/`, `test/`, and `temp/` for all coding suggestions. These contain legacy or experimental code that conflicts with the current architecture.
-* **Environment:** PlatformIO using the ESP32 v3.0 core.
+* **Active Firmware Code:** Located in `arduino/monsoon_esp4.2/`.
+* **Repository Root (`.`):** Top-level architecture, documentation, CAD/tank models (`tanks/`), datasheets (`datasheets/`), and deployment tools (`deploy_ota.py`).
+* **Excluded Folders:** Ignore `attic/`, `test/`, `temp/`, and legacy `arduino/monsoon_esp4.1/` for active coding suggestions. These contain legacy or experimental code that conflicts with the current architecture.
+* **Environment:** PlatformIO using the ESP32 v3.0 core in the active firmware directory.
 
 ## 2. Core Architecture: State vs. Intent
 
@@ -51,7 +52,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **Heaters (Dual Asymmetric Elements - 6 kW Total):**
   * **Main Heater (`RPHEATER` = 4 on GPIO 13):** **4 kW** geyser element (66.7% power).
   * **Auxiliary Heater (`RPHEATERA` = 3 on GPIO 4):** **2 kW** kettle element (33.3% power).
-  * **Auxiliary SSR Control (`SSR_AUX_PIN` = GPIO 33 / D33):** Solid-State Relay (Fotek/HKD SSR-40DA) in series with mechanical relay `RPHEATERA` for Slow-PWM burst fire duty modulation (1000ms window timebase). Gated by `safety_veto` and `RPHEATERA` relay state. Currently set to 100% duty (`ssr_aux_duty = 1.0f`) for baseline testing.
+  * **Auxiliary SSR Control (`SSR_AUX_PIN` = GPIO 33 / D33):** Solid-State Relay (Fotek/HKD SSR-40DA) in series with mechanical relay `RPHEATERA` for Slow-PWM burst fire duty modulation (1000ms window timebase). Gated by `safety_veto` and `RPHEATERA` relay state.
   * **Empirical Thermal Capacity:** $\sim 1\text{ kW}$ per $1\text{ LPM}$ flow ($\text{4 kW} \approx 4\text{--}5\text{ LPM}$, $\text{6 kW} \approx 6\text{--}7\text{ LPM}$).
   * **Multi-Stage Power Ladder:**
     * Stage 3 (100% / 6 kW): Main ON, Aux ON (Default full-power operation).
@@ -72,7 +73,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **Telemetry Datalogger (`monsoon_logger.py`):** 
   * Runs as a user systemd service (`monsoon-logger.service`) under `nicolls@10.0.0.9`.
   * Logs to `/home/nicolls/monsoon/logs/`.
-  * Generates per-shower CSV files with relative `Elapsed_ms` timestamps and token parsing (`*M*` temp, `*N*` flows, `*F*`/`*f*` pump PWM, `*I*` IP, `*r*` RSSI).
+  * Generates per-shower CSV files with relative `Elapsed_ms` timestamps and token parsing (`*M*` temp & power, `*N*` flows, `*W*` aux duty %, `*F*`/`*f*` pump PWM, `*I*` IP, `*r*` RSSI).
 * **OTA Updates & Safety Guard:** 
   * OTA server on `10.0.0.9/ota/monsoon.json`. Firmware versions are staged via `deploy_ota.py` (wildcard board matching enabled).
   * **Safety Guard:** OTA updates and flashing are strictly blocked if the system is in an active state (`auto_state != STATE_OFF`) to prevent abrupt de-energization or resets during active heating/showering.
@@ -108,16 +109,16 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **`STATE_WASH` (Shower):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
-  * **Aux SSR Power Supervisor (`loop_aux_power_supervisor`):** Evaluated every **10 seconds** (slow timebase) with deadband between $55\%$ and $75\%$ recovery PWM:
-    * Temp $\ge \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Trim `ssr_aux_duty` by $-15\%$.
-    * Recovery PWM $\ge 85\% \rightarrow$ Trim `ssr_aux_duty` by $-20\%$.
-    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_aux_duty` by $-10\%$.
-    * Recovery PWM $\le 55\%$ and Temp $\le \text{setpoint} + 0.2^\circ\text{C} \rightarrow$ Gently restore `ssr_aux_duty` by $+5\%$.
-    * Deadband $55\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
+  * **Aux SSR Power Supervisor (`loop_aux_power_supervisor`):** Evaluated every **30 seconds** (slow timebase aligned with thermal lag) with deadband between $70\%$ and $75\%$ recovery PWM:
+    * Temp $\ge \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Gently trim `ssr_aux_duty` by $-5\%$.
+    * Recovery PWM $\ge 85\% \rightarrow$ Trim `ssr_aux_duty` by $-5\%$.
+    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_aux_duty` by $-3\%$.
+    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.4^\circ\text{C} \rightarrow$ Gently restore / creep `ssr_aux_duty` up by $+3\%$.
+    * Deadband $70\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
-    * Base delta: $+0.5\text{ LPM}$.
-    * While `!tank_full`: Delta steadily ramps at $+0.02\text{ LPM/sec}$ ($+1.2\text{ LPM/min}$, capped at $+4.5\text{ LPM}$) to progressively clear any pan pooling.
-    * When `tank_full`: Delta immediately snaps to $0.0\text{ LPM}$ to instantly match delivery flow, holding full-tank equilibrium without overflowing or pump chopping.
+    * Base delta: $+0.2\text{ LPM}$.
+    * While `!tank_full`: Delta gently creeps at $+0.004\text{ LPM/sec}$ (capped at $+0.30\text{ LPM}$) for smooth, surge-free pan clearance.
+    * When `tank_full`: Delta steps to $-0.15\text{ LPM}$ to smoothly settle $\sim 15\text{mm}$ below the top float switch without pump surging.
     * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
 * **Flow & Temperature Sensor Filtering:**
   * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.
