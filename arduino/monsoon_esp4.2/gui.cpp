@@ -352,17 +352,11 @@ void report_lsvals(void)
 {
   String mstr = "*Q";
 
-  // Mechanical sensors
-  if( tank_empty ) mstr += "0";
-  else mstr += "1";
-  if( !tank_full ) mstr += "0"; // !tank_full means the upper sensor is low
-  else mstr += "1";
-
-  // Capacitive sensors
-  if( !level_chigh0 ) mstr += "0";
-  else mstr += "1";
-  if( !level_chigh1 ) mstr += "0";
-  else mstr += "1";
+  // Mechanical float switches (Low float: water safe, High float: tank full)
+  // Bit 0: '1' = Water present (safe), '0' = Dry (tank_empty)
+  // Bit 1: '1' = Full / Overflow,     '0' = Normal level
+  mstr += tank_empty ? "0" : "1";
+  mstr += tank_full ? "1" : "0";
 
   mstr += "*";
   btSerial.println(mstr);  //Serial.println(mstr);
