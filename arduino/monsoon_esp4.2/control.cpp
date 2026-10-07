@@ -279,8 +279,8 @@ void loop_speedcontrol(void)
     if( RPUMP_EN[i]==ROFF || (i == RPUMPR && pump_safety_veto) ) sc_pwmw[i] = 0;
     else {
       int sc_pwmtarg = 255.0/100.0*sc_setperc[i];
-      if( sc_pwmtarg<=sc_pwmw[i] ) sc_pwmw[i] = sc_pwmtarg;
-      else sc_pwmw[i] = min(sc_pwmw[i]+3, sc_pwmtarg);  // limit acceleration
+      if( sc_pwmtarg < sc_pwmw[i] ) sc_pwmw[i] = max(sc_pwmw[i] - 2, sc_pwmtarg); // smooth deceleration (~15% PWM/sec)
+      else sc_pwmw[i] = min(sc_pwmw[i] + 2, sc_pwmtarg); // smooth acceleration (~15% PWM/sec)
     }
   }
 
@@ -497,7 +497,7 @@ void loop_tempcontrolwithheater(void)
 // ----------------------------------------------------------------------
 #include <PID_v1.h>
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-double tc_Kp = 1.0, tc_Ki = 0.004, tc_Kd = 0.8;
+double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 void loop_aux_power_supervisor(void)

@@ -627,6 +627,7 @@ void loop_autowash(void)
     case WASH_NONE:
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
+        htrs_enable = 1;
         temp_controlmode = TCSPEED;
         auto_wtopupenable = 1; // Safety fallback
         auto_wtopup_timeout = 120000; // 120s safety fallback timeout (recovery pump handles closed-loop replenishment)
@@ -1249,6 +1250,9 @@ void auto_switchstate(int state, String reason)
   }
   if( auto_state==STATE_FILL ) {
     fill_overfill_count = 0;
+  }
+  if( auto_state==STATE_WARM || auto_state==STATE_WASH || auto_state==STATE_WARM1 || auto_state==STATE_WASH1 ) {
+    htrs_enable = 1; // Re-enable heater gatekeeper for active heating states (clears PAUSE lockout)
   }
   auto_statestime = millis();
   
