@@ -532,6 +532,10 @@ void loop_autowarm(void)
       if( just_entered ) {
         btLog("Entering WARM: Preparing shower circulation.");
         temp_controlmode = TCNONE; // loop_autowarm manages staged heaters directly
+        htrs_enable = 1;
+        ssr_aux_duty = 1.0f;
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
         auto_wtopupenable = 1; // Keep tank full as safety fallback only
         auto_wtopup_timeout = 120000; // 120s safety fallback timeout (closed-loop scavenge handles replenishment)
         auto_wtopup_interval = 30000; // 30s repeat guard once active
@@ -549,7 +553,9 @@ void loop_autowarm(void)
         setpump_en(RPUMPD, RON);
         setpump_lpm(RPUMPD, 3.8f);
         auto_scavengecontrolenable = 1;
-        // Engage full 6 kW (Main 4kW + Aux 2kW)
+        // Engage full 6 kW (Main 4kW + Aux 2kW at 100% duty)
+        htrs_enable = 1;
+        ssr_aux_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
         setrelay_en(RPHEATERA, RON);
       }
@@ -628,6 +634,9 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
         htrs_enable = 1;
+        ssr_aux_duty = 1.0f;
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
         temp_controlmode = TCSPEED;
         auto_wtopupenable = 1; // Safety fallback
         auto_wtopup_timeout = 120000; // 120s safety fallback timeout (recovery pump handles closed-loop replenishment)
@@ -639,6 +648,10 @@ void loop_autowash(void)
     case WASH_SOFTSTART:
       if( just_entered ) {
         btLog("WASH: Soft-start circulation ramping.");
+        htrs_enable = 1;
+        ssr_aux_duty = 1.0f;
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
@@ -1268,6 +1281,12 @@ void auto_switchstate(int state, String reason)
   auto_substate = 0;
 
   rpinsen_reset();
+  if (auto_state == STATE_WARM || auto_state == STATE_WASH || auto_state == STATE_WARM1 || auto_state == STATE_WASH1) {
+    htrs_enable = 1;
+    ssr_aux_duty = 1.0f;
+    setrelay_en(RPHEATER, RON);
+    setrelay_en(RPHEATERA, RON);
+  }
   if (auto_state != STATE_OFF && auto_state != STATE_NONE) {
     // Keep ball valve closed (RON) throughout any active state
     setrelay_en(RPBALLVALVE, RON);
