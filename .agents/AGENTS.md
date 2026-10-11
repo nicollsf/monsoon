@@ -112,12 +112,12 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **`STATE_WASH` (Shower):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
-  * **Main SSR Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **15 seconds** with deadband between $70\%$ and $75\%$ recovery PWM:
-    * Temp $\ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Trim `ssr_main_duty` by $-15\%$ or shed Aux 2kW if duty already $< 10\%$.
-    * Temp $\ge \text{setpoint} + 0.8^\circ\text{C} \rightarrow$ Step down `ssr_main_duty` by $-10\%$.
-    * Recovery PWM $\ge 85\% \rightarrow$ Step down `ssr_main_duty` by $-10\%$.
-    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_main_duty` by $-5\%$.
-    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.3^\circ\text{C} \rightarrow$ Restore / creep `ssr_main_duty` up by $+5\%$.
+  * **Main SSR Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **10 seconds** with deadband between $70\%$ and $75\%$ recovery PWM (~3x faster shedding in kW to prevent recovery pump saturation and auto-topup triggers):
+    * Temp $\ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Fast shed $600\text{ W}$ ($-15\%$ Main duty) or shed Aux 2kW if duty $< 10\%$.
+    * Temp $\ge \text{setpoint} + 0.8^\circ\text{C} \rightarrow$ Shed $320\text{ W}$ ($-8\%$ Main duty, ~3.2x faster).
+    * Recovery PWM $\ge 85\% \rightarrow$ Shed $320\text{ W}$ ($-8\%$ Main duty, ~3.2x faster).
+    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim $160\text{ W}$ ($-4\%$ Main duty).
+    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.3^\circ\text{C} \rightarrow$ Gently creep duty up by $+100\text{ W}$ ($+2.5\%$).
     * Deadband $70\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.2\text{ LPM}$.

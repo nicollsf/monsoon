@@ -514,40 +514,42 @@ void loop_main_power_supervisor(void)
     return;
   }
 
-  // 15-second supervisory timebase (responsive enough to prevent tank level drain, smooth for thermal inertia)
-  if (now - last_eval < 15000) return;
+  // 10-second supervisory timebase (fast enough to shed power well before the 120s top-up timeout)
+  if (now - last_eval < 10000) return;
   last_eval = now;
 
   float rec_pwm = sc_setperc[RPUMPR];
   float prev_duty = ssr_main_duty;
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
 
+  // Shedding steps scaled by ~3x in kW compared to earlier 100W steps:
+  // On 4 kW element: 8% duty = 320 W shed step (~3.2x), 15% duty = 600 W shed step (~6x)
   if (temp1 >= temp_setpoint + 1.2f) {
-    // Severe over-temperature: trim Main SSR or shed Aux heater
+    // Severe over-temperature: shed 600 W (15% Main duty) or shed 2 kW Aux
     if (ssr_main_duty > 0.10f) {
       ssr_main_duty = max(0.0f, ssr_main_duty - 0.15f);
     } else if (aux_on) {
       setrelay_en(RPHEATERA, ROFF); // Shed 2kW Aux
-      ssr_main_duty = 0.40f;        // 1.6 kW total
-      btLog("Severe overtemp (T > SP+1.2C): Shed Aux heater -> Main 40% (1.6 kW)");
+      ssr_main_duty = 0.50f;        // 2.0 kW total
+      btLog("Severe overtemp (T > SP+1.2C): Shed Aux heater -> Main 50% (2.0 kW)");
     }
   } else if (temp1 >= temp_setpoint + 0.8f) {
-    // Moderate over-temperature: step down Main SSR duty by 10%
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
+    // Moderate over-temperature: shed 320 W (8% Main duty, 3.2x faster)
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.08f);
   } else if (rec_pwm >= 85.0f) {
-    // Critical hydraulic headroom limit: trim Main SSR duty by 10%
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
+    // Critical hydraulic headroom limit: shed 320 W (8% Main duty, 3.2x faster)
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.08f);
   } else if (rec_pwm >= 75.0f) {
-    // Approaching headroom limit: gently trim Main SSR duty by 5%
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
+    // Approaching headroom limit: gently shed 160 W (4% Main duty)
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.04f);
   } else if (rec_pwm <= 70.0f && temp1 <= temp_setpoint + 0.3f) {
-    // Safe headroom & temp stable: creep Main SSR duty back up
+    // Safe headroom & temp stable: gently creep Main SSR duty back up (+100 W per 10s)
     if (!aux_on && ssr_main_duty >= 0.90f) {
       setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
       ssr_main_duty = 0.50f;       // 4.0 kW total
       btLog("Headroom clear: Restore Aux heater -> Main 50% (4.0 kW)");
     } else if (ssr_main_duty < 1.0f) {
-      ssr_main_duty = min(1.0f, ssr_main_duty + 0.05f);
+      ssr_main_duty = min(1.0f, ssr_main_duty + 0.025f);
     }
   }
 
