@@ -124,8 +124,8 @@ def parse_telemetry(payload):
         elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
             updated = True
-        elif tag == 'A': # Ambient temperatures (*A22.5,23.1*)
-            amb_parts = val.split(',')
+        elif token.startswith('aT'): # Ambient temperatures (*aT22.5,23.1*)
+            amb_parts = token[2:].split(',')
             if len(amb_parts) >= 1 and amb_parts[0].strip():
                 telemetry_data["amb_water"] = amb_parts[0].strip()
             if len(amb_parts) >= 2 and amb_parts[1].strip():

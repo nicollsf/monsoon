@@ -302,8 +302,29 @@ void loop_autoscavengecontrol(void)
     auto_scavenge_integral = 0.0f;
   }
 
-  float total_pwm = constrain(ff_pwm + auto_scavenge_integral, 0.0f, 100.0f);
-  setpump_perc(RPUMPR, total_pwm);
+  float target_pwm = constrain(ff_pwm + auto_scavenge_integral, 0.0f, 100.0f);
+  
+  // Rate-limiting slew filter on recovery pump:
+  // Prevent rogue flow sensor spikes from jolting recovery PWM upwards.
+  // Maximum slew: +3.0% PWM per 500ms (+6.0% PWM/sec) upward, -5.0% PWM per 500ms downward.
+  static float last_applied_pwm = 20.0f;
+  static unsigned long last_slew_time = 0;
+  if (now - last_slew_time > 2000) {
+    last_applied_pwm = target_pwm; // Re-align after state transition or long pause
+  } else {
+    float max_up = 3.0f;
+    float max_down = 5.0f;
+    if (target_pwm > last_applied_pwm + max_up) {
+      last_applied_pwm += max_up;
+    } else if (target_pwm < last_applied_pwm - max_down) {
+      last_applied_pwm -= max_down;
+    } else {
+      last_applied_pwm = target_pwm;
+    }
+  }
+  last_slew_time = now;
+
+  setpump_perc(RPUMPR, last_applied_pwm);
 }
 
 

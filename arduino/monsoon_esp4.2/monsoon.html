@@ -767,17 +767,19 @@
           }
           break;
 
-        case 'A': // Ambient temperatures (*A22.5,23.1*)
-          const aParts = data.split(',');
-          if (aParts.length >= 1) {
-            const wAmb = parseFloat(aParts[0]);
-            const wEl = document.getElementById('amb-water-val');
-            if (wEl && !isNaN(wAmb)) wEl.innerText = wAmb.toFixed(1);
-          }
-          if (aParts.length >= 2) {
-            const aAmb = parseFloat(aParts[1]);
-            const aEl = document.getElementById('amb-air-val');
-            if (aEl && !isNaN(aAmb)) aEl.innerText = aAmb.toFixed(1);
+        case 'a': // Ambient temperatures (*aT22.5,23.1*)
+          if (data.startsWith('T')) {
+            const aParts = data.slice(1).split(',');
+            if (aParts.length >= 1) {
+              const wAmb = parseFloat(aParts[0]);
+              const wEl = document.getElementById('amb-water-val');
+              if (wEl && !isNaN(wAmb)) wEl.innerText = wAmb.toFixed(1);
+            }
+            if (aParts.length >= 2) {
+              const aAmb = parseFloat(aParts[1]);
+              const aEl = document.getElementById('amb-air-val');
+              if (aEl && !isNaN(aAmb)) aEl.innerText = aAmb.toFixed(1);
+            }
           }
           break;
 

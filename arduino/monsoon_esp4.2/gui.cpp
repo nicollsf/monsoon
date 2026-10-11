@@ -320,8 +320,8 @@ void report_tsvals()
   mstr += String(temp_setpoint) + "*";
   btSerial.println(mstr);
 
-  // Broadcast ambient temperatures (*A<amb_water>,<amb_air>*)
-  mstr = "*A" + String(ambient_water_cold, 1) + "," + String(ambient_air_idle, 1) + "*";
+  // Broadcast ambient temperatures (*aT<amb_water>,<amb_air>*)
+  mstr = "*aT" + String(ambient_water_cold, 1) + "," + String(ambient_air_idle, 1) + "*";
   btSerial.println(mstr);
 
   tsvals_lastreport = millis();

@@ -563,13 +563,13 @@ void loop_main_power_supervisor(void)
   } else if (rec_pwm <= 75.0f && temp_pred_45s <= temp_setpoint + 0.2f && temp1 <= temp_setpoint + 0.3f) {
     // MONSOON FLOW CREEP:
     // Recovery has comfortable headroom (<75%), and 45s prediction indicates no thermal runaway.
-    // Gently creep power up (+60 W / +1.5% duty per 15s) to push delivery flow higher!
+    // Confidently creep power up (+140 W / +3.5% duty per 15s) to push delivery flow higher!
     if (!aux_on && ssr_main_duty >= 0.90f) {
       setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
       ssr_main_duty = 0.50f;       // 4.0 kW total
       btLog("Headroom clear: Restore Aux heater -> Main 50% (4.0 kW)");
     } else if (ssr_main_duty < 1.0f) {
-      ssr_main_duty = min(1.0f, ssr_main_duty + 0.015f); // +60 W creep
+      ssr_main_duty = min(1.0f, ssr_main_duty + 0.035f); // +140 W creep (+3.5% duty)
     }
   }
   // Deadband: When 75% <= rec_pwm < 80% or temp_pred is balanced: hold steady (zero hunting).
