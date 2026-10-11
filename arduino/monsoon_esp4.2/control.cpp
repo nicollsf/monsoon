@@ -501,10 +501,28 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
+float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
+
 void loop_main_power_supervisor(void)
 {
   static unsigned long last_eval = 0;
   unsigned long now = millis();
+
+  bool aux_on = (getrelay_en(RPHEATERA) == RON);
+  float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
+
+  // Flow-dependent thermal loss model evaluated continuously:
+  // UA(Q) = 100 + 16.0 * Q_del (W/C)
+  // P_loss = UA(Q) * (temp1 - ambient_water_cold) / 1000.0 (kW)
+  // Loop thermal mass C_th = 62.76 kJ/C (15 L loop)
+  // dT/dt = (P_heaters - P_loss) / C_th (C/s)
+  float q_del = max(2.0f, flow_lpm0);
+  float ua_eff = 100.0f + 16.0f * q_del; // W/C
+  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
+  float dtemp_dt_s = (total_kw - p_loss_kw) / 62.76f; // C/s
+
+  // 45-second predictive lookahead temperature
+  temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
 
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
@@ -520,23 +538,6 @@ void loop_main_power_supervisor(void)
 
   float rec_pwm = sc_setperc[RPUMPR];
   float prev_duty = ssr_main_duty;
-  bool aux_on = (getrelay_en(RPHEATERA) == RON);
-
-  // Current electrical power in kW
-  float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
-
-  // Flow-dependent thermal loss model:
-  // UA(Q) = 100 + 16.0 * Q_del (W/C)
-  // P_loss = UA(Q) * (temp1 - ambient_water_cold) / 1000.0 (kW)
-  // Loop thermal mass C_th = 62.76 kJ/C (15 L loop)
-  // dT/dt = (P_heaters - P_loss) / C_th (C/s)
-  float q_del = max(2.0f, flow_lpm0);
-  float ua_eff = 100.0f + 16.0f * q_del; // W/C
-  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
-  float dtemp_dt_s = (total_kw - p_loss_kw) / 62.76f; // C/s
-
-  // 45-second predictive lookahead temperature
-  float temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
 
   // --- MODEL-PREDICTIVE SUPERVISOR LOGIC ---
   // The fast flow PID regulates instantaneous temperature by speeding up delivery pump.

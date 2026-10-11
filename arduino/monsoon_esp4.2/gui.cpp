@@ -310,7 +310,7 @@ void report_tsvals()
   int main_duty_pct = (int)(ssr_main_duty * 100.0f + 0.5f);
 
   String mstr = "*M";
-  mstr += String(temp, 1) + "," + String(bte_htr_level, 1) + "," + String(total_kw, 2) + "," + String(main_duty_pct) + "*";
+  mstr += String(temp, 1) + "," + String(bte_htr_level, 1) + "," + String(temp_pred_45s, 1) + "," + String(total_kw, 2) + "," + String(main_duty_pct) + "*";
   btSerial.println(mstr);
 
   mstr = "*W" + String(main_duty_pct) + "*";

@@ -105,15 +105,17 @@ def parse_telemetry(payload):
         tag = token[0]
         val = token[1:]
         
-        if tag == 'M': # Temperature (*M37.5* or *M37.5,45.0,4.0,100*)
+        if tag == 'M': # Temperature (*M37.5,45.0,38.2,4.0,100*)
             m_parts = val.split(',')
             if len(m_parts) >= 1:
                 telemetry_data["temp"] = m_parts[0].strip()
             if len(m_parts) >= 3:
-                telemetry_data["htr_total_kw"] = m_parts[2].strip()
+                telemetry_data["temp_pred_45s"] = m_parts[2].strip()
             if len(m_parts) >= 4:
-                telemetry_data["main_duty"] = m_parts[3].strip()
-                telemetry_data["aux_duty"] = m_parts[3].strip()
+                telemetry_data["htr_total_kw"] = m_parts[3].strip()
+            if len(m_parts) >= 5:
+                telemetry_data["main_duty"] = m_parts[4].strip()
+                telemetry_data["aux_duty"] = m_parts[4].strip()
             updated = True
         elif tag == 'W': # Main SSR duty % (*W100*)
             telemetry_data["main_duty"] = val.strip()
@@ -249,7 +251,7 @@ def on_message(client, userdata, msg):
                     # Write CSV Headers
                     csv_writer.writerow([
                         "Elapsed_ms", "State", "Substate", 
-                        "Temp", "Setpoint", 
+                        "Temp", "Temp_Pred", "Setpoint", 
                         "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est", "Flow1_Rec_Target",
                         "PWM0", "PWM1", 
                         "Filter_Yield", "Pressure", 
@@ -287,6 +289,7 @@ def on_message(client, userdata, msg):
                         telemetry_data["state"],
                         telemetry_data["substate"],
                         telemetry_data["temp"],
+                        telemetry_data.get("temp_pred_45s", telemetry_data["temp"]),
                         telemetry_data["setpoint"],
                         telemetry_data["flow0"],
                         telemetry_data["flow1"],

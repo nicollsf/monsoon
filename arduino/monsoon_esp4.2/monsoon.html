@@ -403,6 +403,17 @@
             fill: true
           },
           {
+            label: 'Pred (+45s)',
+            yAxisID: 'y',
+            data: [],
+            borderColor: '#c084fc', // purple-400
+            backgroundColor: 'rgba(192, 132, 252, 0.05)',
+            borderWidth: 2,
+            borderDash: [4, 4],
+            pointRadius: 0,
+            fill: false
+          },
+          {
             label: 'Power (kW)',
             yAxisID: 'y1',
             data: [],
@@ -731,14 +742,19 @@
           const mParts = data.split(',');
           const temp = parseFloat(mParts[0]);
           let totalKw = NaN;
+          let tempPred = NaN;
           if (mParts.length >= 3) {
-            totalKw = parseFloat(mParts[2]);
+            tempPred = parseFloat(mParts[2]);
+          }
+          if (mParts.length >= 4) {
+            totalKw = parseFloat(mParts[3]);
           }
           if (!isNaN(temp)) {
             document.getElementById('temp-val').innerText = temp.toFixed(1);
             addChartData(tempChart, '', 0, temp);
+            addChartData(tempChart, '', 1, (!isNaN(tempPred) ? tempPred : temp));
             if (!isNaN(totalKw)) {
-              addChartData(tempChart, '', 1, totalKw);
+              addChartData(tempChart, '', 2, totalKw);
               const kwEl = document.getElementById('htr-total-kw-val');
               if (kwEl) kwEl.innerText = totalKw.toFixed(1);
             }
