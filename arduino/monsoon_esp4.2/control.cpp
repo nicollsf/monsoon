@@ -514,7 +514,7 @@ void loop_main_power_supervisor(void)
     return;
   }
 
-  // 15-second supervisory timebase (balanced response to thermal dynamics and hydraulic limits)
+  // 15-second supervisory timebase
   if (now - last_eval < 15000) return;
   last_eval = now;
 
@@ -522,40 +522,60 @@ void loop_main_power_supervisor(void)
   float prev_duty = ssr_main_duty;
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
 
-  // Shedding steps balanced against 15s cadence:
-  // On 4 kW element: 5% duty = 200 W (0.80 kW/min), 10% duty = 400 W (1.60 kW/min)
-  if (temp1 >= temp_setpoint + 1.2f) {
-    // Severe over-temperature: shed 400 W (10% Main duty) or shed 2 kW Aux
+  // Current electrical power in kW
+  float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
+
+  // Flow-dependent thermal loss model:
+  // UA(Q) = 100 + 16.0 * Q_del (W/C)
+  // P_loss = UA(Q) * (temp1 - ambient_water_cold) / 1000.0 (kW)
+  // Loop thermal mass C_th = 62.76 kJ/C (15 L loop)
+  // dT/dt = (P_heaters - P_loss) / C_th (C/s)
+  float q_del = max(2.0f, flow_lpm0);
+  float ua_eff = 100.0f + 16.0f * q_del; // W/C
+  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
+  float dtemp_dt_s = (total_kw - p_loss_kw) / 62.76f; // C/s
+
+  // 45-second predictive lookahead temperature
+  float temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
+
+  // --- MODEL-PREDICTIVE SUPERVISOR LOGIC ---
+  // The fast flow PID regulates instantaneous temperature by speeding up delivery pump.
+  // The supervisor hunts for maximum flow by creeping power up, pre-empted ONLY by
+  // the 45s predictive overheat guard or the 80% recovery pump limit.
+
+  if (temp_pred_45s >= temp_setpoint + 1.2f || temp1 >= temp_setpoint + 1.2f) {
+    // Severe overheat projected: shed 400 W (10% Main duty) or shed 2 kW Aux
     if (ssr_main_duty > 0.10f) {
       ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
     } else if (aux_on) {
-      setrelay_en(RPHEATERA, ROFF); // Shed 2kW Aux
-      ssr_main_duty = 0.50f;        // 2.0 kW total
-      btLog("Severe overtemp (T > SP+1.2C): Shed Aux heater -> Main 50% (2.0 kW)");
+      setrelay_en(RPHEATERA, ROFF);
+      ssr_main_duty = 0.50f;
+      btLog("Pred 45s severe overtemp (" + String(temp_pred_45s, 1) + "C): Shed Aux -> Main 50%");
     }
-  } else if (temp1 >= temp_setpoint + 0.8f) {
-    // Moderate over-temperature: shed 200 W (5% Main duty)
+  } else if (rec_pwm >= 85.0f || temp_pred_45s >= temp_setpoint + 0.7f) {
+    // Critical hydraulic limit (Rec >= 85%) OR predicted overheat (+0.7C in 45s):
+    // Trim back 200 W (5% Main duty) to protect pan level
     ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
-  } else if (rec_pwm >= 85.0f) {
-    // Critical hydraulic headroom limit: shed 200 W (5% Main duty)
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
-  } else if (rec_pwm >= 75.0f) {
-    // Approaching headroom limit: gently shed 100 W (2.5% Main duty)
+  } else if (rec_pwm >= 80.0f) {
+    // Approaching hydraulic recovery limit: gently trim 100 W (2.5% Main duty)
     ssr_main_duty = max(0.0f, ssr_main_duty - 0.025f);
-  } else if (rec_pwm <= 70.0f && temp1 <= temp_setpoint + 0.3f) {
-    // Safe headroom & temp stable: gently creep Main SSR duty back up (+80 W per 15s)
+  } else if (rec_pwm <= 75.0f && temp_pred_45s <= temp_setpoint + 0.2f && temp1 <= temp_setpoint + 0.3f) {
+    // MONSOON FLOW CREEP:
+    // Recovery has comfortable headroom (<75%), and 45s prediction indicates no thermal runaway.
+    // Gently creep power up (+60 W / +1.5% duty per 15s) to push delivery flow higher!
     if (!aux_on && ssr_main_duty >= 0.90f) {
       setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
       ssr_main_duty = 0.50f;       // 4.0 kW total
       btLog("Headroom clear: Restore Aux heater -> Main 50% (4.0 kW)");
     } else if (ssr_main_duty < 1.0f) {
-      ssr_main_duty = min(1.0f, ssr_main_duty + 0.020f);
+      ssr_main_duty = min(1.0f, ssr_main_duty + 0.015f); // +60 W creep
     }
   }
+  // Deadband: When 75% <= rec_pwm < 80% or temp_pred is balanced: hold steady (zero hunting).
 
-  float total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
+  total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
   if (ssr_main_duty != prev_duty) {
-    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "%)");
+    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "% | Tpred45s=" + String(temp_pred_45s, 1) + "C)");
   }
 }
 

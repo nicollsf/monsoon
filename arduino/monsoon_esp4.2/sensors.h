@@ -45,8 +45,14 @@ void loop_tempsens1(void);
 // ----------------------------------------------------------------------
 
 extern float temp;
+extern float ambient_water_cold; // Cold fill water temp (from FILL_FULL)
+extern float ambient_air_idle;   // Idle ambient air temp (from STATE_OFF after >90 min)
+extern unsigned long last_shower_ended_ms; // millis timestamp when last shower ended
 void setup_tempsens(void);
 void loop_tempsens(void);
+void update_ambient_air_idle(void);
+void update_ambient_water_cold(void);
+void record_shower_ended(void);
 
 // ----------------------------------------------------------------------
 //   Flow sensing

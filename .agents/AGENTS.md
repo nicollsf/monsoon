@@ -112,13 +112,15 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **`STATE_WASH` (Shower):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
-  * **Main SSR Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **15 seconds** with deadband between $70\%$ and $75\%$ recovery PWM:
-    * Temp $\ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Severe shed $400\text{ W}$ ($-10\%$ Main duty) or shed Aux 2kW if duty $< 10\%$.
-    * Temp $\ge \text{setpoint} + 0.8^\circ\text{C} \rightarrow$ Shed $200\text{ W}$ ($-5\%$ Main duty, $\sim 0.80\text{ kW/min}$).
-    * Recovery PWM $\ge 85\% \rightarrow$ Critical hydraulic headroom shed $200\text{ W}$ ($-5\%$ Main duty).
-    * Recovery PWM $\ge 75\% \rightarrow$ Approaching headroom shed $100\text{ W}$ ($-2.5\%$ Main duty, $\sim 0.40\text{ kW/min}$).
-    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.3^\circ\text{C} \rightarrow$ Gently creep duty up by $+80\text{ W}$ ($+2.0\%$).
-    * Deadband $70\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
+  * **Model-Predictive Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **15 seconds** using a 45-second forward lookahead thermal model ($C_{th} = 62.76\text{ kJ/}^\circ\text{C}$, $UA(Q) = 100 + 16.0 \cdot Q_{\text{del}}\text{ W/}^\circ\text{C}$):
+    * **Decoupled Architecture:** The fast inner PID (1.5s) regulates instantaneous temperature by modulating delivery pump flow. The outer supervisor hunts for maximum drenching flow by creeping heater power up, pre-empted only by hydraulic limits or predicted thermal runaway.
+    * **Monsoon Flow Creep:** When recovery PWM $\le 75\%$ and $T_{\text{pred}}(+45\text{s}) \le \text{setpoint} + 0.2^\circ\text{C}$ (and $T_{\text{meas}} \le \text{setpoint} + 0.3^\circ\text{C}$), Main SSR duty creeps up by $+60\text{ W}$ ($+1.5\%$) per 15s to push flow higher.
+    * **Hydraulic Limit Safeguards:**
+      * Recovery PWM $\ge 85\%$ OR $T_{\text{pred}} \ge \text{setpoint} + 0.7^\circ\text{C} \rightarrow$ Trim $200\text{ W}$ ($-5\%$ Main duty).
+      * Recovery PWM $\ge 80\% \rightarrow$ Gently trim $100\text{ W}$ ($-2.5\%$ Main duty).
+    * **Severe Overheat Safeguard:** $T_{\text{pred}} \ge \text{setpoint} + 1.2^\circ\text{C}$ OR $T_{\text{meas}} \ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Shed $400\text{ W}$ ($-10\%$ Main duty) or shed Aux 2kW if duty $< 10\%$.
+    * **Sweet Spot Deadband ($75\%\dots 80\%$ Recovery PWM):** Power is held steady with zero fighting and zero hunting.
+    * **Dual Ambient Tracking (90-Minute Rule):** Tracks both cold fill water temperature ($T_{\text{water}}$, updated in `FILL_FULL` if $>90$m since last shower) and idle air temperature ($T_{\text{air}}$, updated in `STATE_OFF` if $>90$m). Persisted to NVRAM Preferences (`monsoon_env`).
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.2\text{ LPM}$.
     * While `!tank_full`: Delta gently creeps at $+0.004\text{ LPM/sec}$ (capped at $+0.30\text{ LPM}$) for smooth, surge-free pan clearance.

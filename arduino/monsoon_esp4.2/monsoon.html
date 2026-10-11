@@ -296,6 +296,9 @@
           <div class="mt-1.5 text-[11px] text-gray-500 font-medium">
             Power: <span id="htr-total-kw-val" class="text-amber-400 font-bold">--</span> kW
           </div>
+          <div class="mt-1 text-[10px] text-gray-400 font-mono">
+            Amb: W:<span id="amb-water-val" class="text-cyan-400 font-bold">--</span>&deg; A:<span id="amb-air-val" class="text-emerald-400 font-bold">--</span>&deg;
+          </div>
         </div>
         <!-- Del Flow -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-sm text-center">
@@ -745,6 +748,20 @@
             if (!isNaN(auxPct)) {
               updateAuxDutyUI(auxPct);
             }
+          }
+          break;
+
+        case 'A': // Ambient temperatures (*A22.5,23.1*)
+          const aParts = data.split(',');
+          if (aParts.length >= 1) {
+            const wAmb = parseFloat(aParts[0]);
+            const wEl = document.getElementById('amb-water-val');
+            if (wEl && !isNaN(wAmb)) wEl.innerText = wAmb.toFixed(1);
+          }
+          if (aParts.length >= 2) {
+            const aAmb = parseFloat(aParts[1]);
+            const aEl = document.getElementById('amb-air-val');
+            if (aEl && !isNaN(aAmb)) aEl.innerText = aAmb.toFixed(1);
           }
           break;
 

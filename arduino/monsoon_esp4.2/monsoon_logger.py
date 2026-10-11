@@ -63,6 +63,8 @@ telemetry_data = {
     "main_duty": "100",
     "aux_duty": "100",
     "htr_total_kw": "0.0",
+    "amb_water": "22.0",
+    "amb_air": "22.0",
     "pump_relay_act": "0",
     "burp_act": "0"
 }
@@ -119,6 +121,13 @@ def parse_telemetry(payload):
             updated = True
         elif tag == 't': # Setpoint (*t42.0*)
             telemetry_data["setpoint"] = val
+            updated = True
+        elif tag == 'A': # Ambient temperatures (*A22.5,23.1*)
+            amb_parts = val.split(',')
+            if len(amb_parts) >= 1 and amb_parts[0].strip():
+                telemetry_data["amb_water"] = amb_parts[0].strip()
+            if len(amb_parts) >= 2 and amb_parts[1].strip():
+                telemetry_data["amb_air"] = amb_parts[1].strip()
             updated = True
         elif tag == 'N': # Flow rates (*N4.2,5.8,4.3,4.5*)
             flows = val.split(',')
@@ -233,6 +242,8 @@ def on_message(client, userdata, msg):
                     csv_writer.writerow([f"# Session Start: {now_time.strftime('%Y-%m-%d %H:%M:%S')}"])
                     csv_writer.writerow([f"# First Shower Today: {first_today}"])
                     csv_writer.writerow([f"# Initial Ambient Water Temp: {initial_temp} C"])
+                    csv_writer.writerow([f"# Stored Ambient Water (Cold Fill): {telemetry_data.get('amb_water', 'N/A')} C"])
+                    csv_writer.writerow([f"# Stored Ambient Air (Idle >90m): {telemetry_data.get('amb_air', 'N/A')} C"])
                     csv_writer.writerow([])
                     
                     # Write CSV Headers

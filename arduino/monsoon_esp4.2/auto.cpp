@@ -354,8 +354,14 @@ void loop_autooff(void)
       if( millis()-auto_substatestime>5000 && psens0<15.0 ) auto_switchsubstate(OFF_DONE);
       break;
 
-    case OFF_DONE:
+    case OFF_DONE: {
+      static unsigned long last_air_check = 0;
+      if (millis() - last_air_check >= 10000) {
+        last_air_check = millis();
+        update_ambient_air_idle();
+      }
       break;
+    }
   }
 
   return;
@@ -414,6 +420,7 @@ void loop_autofill(void)
 
       if( tank_full ) {
         setrelay_en(RPINLET, ROFF); // Explicitly turn off the inlet valve
+        update_ambient_water_cold(); // Sample cold fill water temp
         auto_switchsubstate(FILL_PREPARE);
       }
       break;
@@ -1299,6 +1306,7 @@ void auto_switchstate(int state, String reason)
     if (old_state != STATE_OFF) {
       // Entering state OFF: start the 5-minute timer before reopening the ball valve
       ball_valve_off_start = millis();
+      record_shower_ended(); // Record timestamp for 90-minute ambient rule
       btLog("State OFF: Ball valve will remain closed for 5 minutes before reopening.");
     }
   } else {

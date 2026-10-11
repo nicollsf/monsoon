@@ -244,11 +244,60 @@ void loop_tempsens1(void)
 // ----------------------------------------------------------------------
 
 float temp = -1000.0;
+float ambient_water_cold = 22.0f; // Default baseline
+float ambient_air_idle = 22.0f;   // Default baseline
+unsigned long last_shower_ended_ms = 0;
+const unsigned long NINETY_MINUTES_MS = 90UL * 60UL * 1000UL;
 
 void setup_tempsens(void)
 {
   //setup_tempsens0(); // DS18B20 OneWire retired
   setup_tempsens1();
+
+  // Load stored ambients from NVRAM
+  Preferences p;
+  p.begin("monsoon_env", true);
+  ambient_water_cold = p.getFloat("amb_water", 22.0f);
+  ambient_air_idle = p.getFloat("amb_air", 22.0f);
+  p.end();
+  Serial.printf("Sensors: Loaded ambient water=%.1fC, ambient air=%.1fC from NVRAM.\n", ambient_water_cold, ambient_air_idle);
+}
+
+void update_ambient_air_idle(void)
+{
+  // If idle in STATE_OFF for >90 minutes, plumbing is at true air temperature
+  if (temp1 > 5.0f && temp1 < 45.0f) {
+    if (last_shower_ended_ms == 0 || (millis() - last_shower_ended_ms >= NINETY_MINUTES_MS)) {
+      ambient_air_idle = temp1;
+      Preferences p;
+      p.begin("monsoon_env", false);
+      p.putFloat("amb_air", ambient_air_idle);
+      p.end();
+      Serial.printf("Sensors: Updated ambient air to %.1fC (>90 min rule).\n", ambient_air_idle);
+    }
+  }
+}
+
+void update_ambient_water_cold(void)
+{
+  // Sampled during FILL_FULL as fresh cold mains water rushes in
+  if (temp1 > 5.0f && temp1 < 40.0f) {
+    if (last_shower_ended_ms == 0 || (millis() - last_shower_ended_ms >= NINETY_MINUTES_MS)) {
+      ambient_water_cold = temp1;
+      Preferences p;
+      p.begin("monsoon_env", false);
+      p.putFloat("amb_water", ambient_water_cold);
+      p.end();
+      Serial.printf("Sensors: Updated cold fill ambient water to %.1fC (>90 min rule).\n", ambient_water_cold);
+    } else {
+      Serial.printf("Sensors: Recent shower (<90 min ago). Retaining saved ambient water %.1fC.\n", ambient_water_cold);
+    }
+  }
+}
+
+void record_shower_ended(void)
+{
+  last_shower_ended_ms = millis();
 }
 
 void loop_tempsens(void)
