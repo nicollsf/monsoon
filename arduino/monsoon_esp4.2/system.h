@@ -24,7 +24,8 @@ const int SC_PWM0 = 14, SC_PWM1 = 27;   // speed control (hbridge)
 const int PSPIN = 35;                   // pressure sensor (analog in 0-4096)
 const int RLEVTXPIN = 15;               // level range TX
 const int RLEVRXPIN = 32;               // level range RX
-const int SSR_AUX_PIN = 33;             // Aux heater SSR slow-PWM control (D33)
+const int SSR_MAIN_PIN = 33;            // Main 4kW heater SSR slow-PWM control (D33)
+#define SSR_AUX_PIN SSR_MAIN_PIN        // Backward compatibility alias
 
 // Relay functionality
 const int RPINLET = 0, RPDRAIN = 1, RPDELIVER = 2, RPHEATERA = 3;  // relay pin names

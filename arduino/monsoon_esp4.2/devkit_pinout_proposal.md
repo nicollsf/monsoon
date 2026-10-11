@@ -16,7 +16,7 @@ To maximize future-proofing, we have retired unused features (One-Wire temperatu
 | **4. D34** (GPIO 34) | `LSPINS[1]` (Float Switch High) | | | **19. RX0** (GPIO 3) | Console UART RX (via USB) |
 | **5. D35** (GPIO 35) | `PSPIN` (Pressure Analog) | | | **20. D21** (GPIO 21) | `RPINS[5]` (Relay 5 - Pump) |
 | **6. D32** (GPIO 32) | `RLEVRXPIN` (Range RX) | | | **21. D19** (GPIO 19) | `RPINS[1]` (Relay 1 - Drain) |
-| **7. D33** (GPIO 33) | **FREE** *(General GPIO)* | | | **22. D18** (GPIO 18) | `RPINS[0]` (Relay 0 - Inlet) |
+| **7. D33** (GPIO 33) | `SSR_MAIN_PIN` (Main 4kW SSR PWM) | | | **22. D18** (GPIO 18) | `RPINS[0]` (Relay 0 - Inlet) |
 | **8. D25** (GPIO 25) | `FSPINS[0]` (Delivery Flow) | | | **23. D5** (GPIO 5) | **FREE** *(General GPIO)* |
 | **9. D26** (GPIO 26) | `FSPINS[1]` (Recovery Flow) | | | **24. TX2** (GPIO 17) | `TXD2` (Bluetooth TX) |
 | **10. D27** (GPIO 27) | `SC_PWM1` (Speed Control 1) | | | **25. RX2** (GPIO 16) | `RXD2` (Bluetooth RX) |

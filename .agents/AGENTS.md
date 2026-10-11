@@ -1,6 +1,10 @@
-# Project Rules: Monsoon (ESP32 Recirculating Shower)
-
 Goal: Maintain interchangeable compatibility across Arduino IDE and PlatformIO for the Monsoon recirculating shower system.
+
+## Primary System Objective: The Monsoon Experience
+All engineering in this codebase is directed towards two overarching goals:
+1. **Fast Stabilization:** Getting the system into stable operation as quickly as possible upon entering `WASH`.
+2. **Maximum Flow at Setpoint:** Keeping the delivered flow rate **as high as possible** (the defining "Monsoon" high-flow drenching experience) at the user's setpoint temperature, without exceeding hydraulic recovery limits.
+3. **Simplicity & Robustness:** Keep control algorithms simple, deterministic, and robust. Avoid over-complicated models or estimators that introduce fragile edge cases on the embedded microcontroller.
 
 ## 1. Directory & Scoping Rules
 
@@ -51,14 +55,13 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 
 * **Heaters (Dual Asymmetric Elements - 6 kW Total):**
   * **Main Heater (`RPHEATER` = 4 on GPIO 13):** **4 kW** geyser element (66.7% power).
-  * **Auxiliary Heater (`RPHEATERA` = 3 on GPIO 4):** **2 kW** kettle element (33.3% power).
-  * **Auxiliary SSR Control (`SSR_AUX_PIN` = GPIO 33 / D33):** Solid-State Relay (Fotek/HKD SSR-40DA) in series with mechanical relay `RPHEATERA` for Slow-PWM burst fire duty modulation (1000ms window timebase). Gated by `safety_veto` and `RPHEATERA` relay state.
+  * **Main SSR Control (`SSR_MAIN_PIN` = GPIO 33 / D33):** Solid-State Relay (Fotek/HKD SSR-40DA) in series with mechanical relay `RPHEATER` for Slow-PWM burst fire duty modulation (1000ms window timebase). Gated by `safety_veto` and `RPHEATER` relay state. Provides seamless, gap-free proportional power from $0.0\text{ kW}$ to $4.0\text{ kW}$ ($0\dots 100\%$).
+  * **Auxiliary Heater (`RPHEATERA` = 3 on GPIO 4):** **2 kW** kettle element (33.3% power) on mechanical relay (ON/OFF). Provides $+2.0\text{ kW}$ base boost, extending continuous modulation to $2.0\text{--}6.0\text{ kW}$ with zero dead zones.
   * **Empirical Thermal Capacity:** $\sim 1\text{ kW}$ per $1\text{ LPM}$ flow ($\text{4 kW} \approx 4\text{--}5\text{ LPM}$, $\text{6 kW} \approx 6\text{--}7\text{ LPM}$).
-  * **Multi-Stage Power Ladder:**
-    * Stage 3 (100% / 6 kW): Main ON, Aux ON (Default full-power operation).
-    * Stage 2 (66% / 4 kW): Main ON, Aux OFF (Moderate filter restriction / lower flow).
-    * Stage 1 (33% / 2 kW): Main OFF, Aux ON (Severe filter restriction / high ambient).
-    * Stage 0 (0% / 0 kW): Main OFF, Aux OFF (Thermal runaway / emergency cutout).
+  * **Continuous Modulation & Staging:**
+    * High Power Range ($2.0\dots 6.0\text{ kW}$): Aux ON ($2\text{ kW}$) + Main SSR ($0\dots 100\% \rightarrow 0\dots 4\text{ kW}$).
+    * Low Power Range ($0.0\dots 4.0\text{ kW}$): Aux OFF ($0\text{ kW}$) + Main SSR ($0\dots 100\% \rightarrow 0\dots 4\text{ kW}$).
+    * Cutout ($0\text{ kW}$): Both OFF.
 
 ## 4. Network, Telemetry & Server Architecture
 
@@ -109,11 +112,12 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
 * **`STATE_WASH` (Shower):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
-  * **Aux SSR Power Supervisor (`loop_aux_power_supervisor`):** Evaluated every **30 seconds** (slow timebase aligned with thermal lag) with deadband between $70\%$ and $75\%$ recovery PWM:
-    * Temp $\ge \text{setpoint} + 1.0^\circ\text{C} \rightarrow$ Gently trim `ssr_aux_duty` by $-5\%$.
-    * Recovery PWM $\ge 85\% \rightarrow$ Trim `ssr_aux_duty` by $-5\%$.
-    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_aux_duty` by $-3\%$.
-    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.4^\circ\text{C} \rightarrow$ Gently restore / creep `ssr_aux_duty` up by $+3\%$.
+  * **Main SSR Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **15 seconds** with deadband between $70\%$ and $75\%$ recovery PWM:
+    * Temp $\ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Trim `ssr_main_duty` by $-15\%$ or shed Aux 2kW if duty already $< 10\%$.
+    * Temp $\ge \text{setpoint} + 0.8^\circ\text{C} \rightarrow$ Step down `ssr_main_duty` by $-10\%$.
+    * Recovery PWM $\ge 85\% \rightarrow$ Step down `ssr_main_duty` by $-10\%$.
+    * Recovery PWM $\ge 75\% \rightarrow$ Gently trim `ssr_main_duty` by $-5\%$.
+    * Recovery PWM $\le 70\%$ and Temp $\le \text{setpoint} + 0.3^\circ\text{C} \rightarrow$ Restore / creep `ssr_main_duty` up by $+5\%$.
     * Deadband $70\%\dots 75\%$: Duty is frozen, ensuring zero fighting with the fast flow PID.
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.2\text{ LPM}$.

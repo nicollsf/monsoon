@@ -71,9 +71,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     int duty_pct = srecv.substring(1).toInt();
     if (duty_pct < 0) duty_pct = 0;
     if (duty_pct > 100) duty_pct = 100;
-    extern float ssr_aux_duty;
-    ssr_aux_duty = (float)duty_pct / 100.0f;
-    mqtt_log("Set Aux SSR duty to " + String(duty_pct) + "%");
+    extern float ssr_main_duty;
+    ssr_main_duty = (float)duty_pct / 100.0f;
+    mqtt_log("Set Main SSR duty to " + String(duty_pct) + "% (" + String(4.0f * ssr_main_duty, 1) + " kW)");
     extern void report_tsvals(void);
     report_tsvals();
   }

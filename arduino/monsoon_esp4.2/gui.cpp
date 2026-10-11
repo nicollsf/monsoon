@@ -188,16 +188,16 @@ void serialcmd(char cmd)
     save_temp_setpoint();
   }
 
-  // Auxiliary SSR heater duty cycle nudge
+  // Main 4kW SSR heater duty cycle nudge
   if ( cmd == 'D' || cmd == 'd' ) {
     if ( cmd == 'D' ) {
-      ssr_aux_duty += 0.05f;
+      ssr_main_duty += 0.05f;
     } else {
-      ssr_aux_duty -= 0.05f;
+      ssr_main_duty -= 0.05f;
     }
-    if ( ssr_aux_duty > 1.0f ) ssr_aux_duty = 1.0f;
-    if ( ssr_aux_duty < 0.0f ) ssr_aux_duty = 0.0f;
-    btLog("Aux SSR duty: " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "%");
+    if ( ssr_main_duty > 1.0f ) ssr_main_duty = 1.0f;
+    if ( ssr_main_duty < 0.0f ) ssr_main_duty = 0.0f;
+    btLog("Main SSR duty: " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% (" + String(4.0f * ssr_main_duty, 1) + " kW)");
     report_tsvals();
   }
 
@@ -303,17 +303,17 @@ unsigned long tsready_lastbeep = 0;
 unsigned long tsready_beepperiod = 10000;
 void report_tsvals()
 {
-  float main_kw = (getrelay(RPHEATER) == RON) ? 4.0f : 0.0f;
-  float aux_kw = (getrelay(RPHEATERA) == RON) ? (2.0f * constrain(ssr_aux_duty, 0.0f, 1.0f)) : 0.0f;
+  float main_kw = (getrelay(RPHEATER) == RON) ? (4.0f * constrain(ssr_main_duty, 0.0f, 1.0f)) : 0.0f;
+  float aux_kw = (getrelay(RPHEATERA) == RON) ? 2.0f : 0.0f;
   float total_kw = main_kw + aux_kw;
   float bte_htr_level = 40.0f + (total_kw / 6.0f) * 20.0f; // Scale 0..6 kW to 40..60°C for BTE single-axis graph
-  int aux_duty_pct = (int)(ssr_aux_duty * 100.0f + 0.5f);
+  int main_duty_pct = (int)(ssr_main_duty * 100.0f + 0.5f);
 
   String mstr = "*M";
-  mstr += String(temp, 1) + "," + String(bte_htr_level, 1) + "," + String(total_kw, 2) + "," + String(aux_duty_pct) + "*";
+  mstr += String(temp, 1) + "," + String(bte_htr_level, 1) + "," + String(total_kw, 2) + "," + String(main_duty_pct) + "*";
   btSerial.println(mstr);
 
-  mstr = "*W" + String(aux_duty_pct) + "*";
+  mstr = "*W" + String(main_duty_pct) + "*";
   btSerial.println(mstr);
 
   mstr = "*t";

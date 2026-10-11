@@ -20,7 +20,7 @@ float htrs_maxtemp = 62.5;
 bool pump_safety_veto = false; // Veto for recovery pump due to tank full
 bool inlet_safety_veto = false; // Veto for inlet valve due to tank full
 
-float ssr_aux_duty = 1.0f; // Aux SSR duty cycle: 0.0f (0%) to 1.0f (100%)
+float ssr_main_duty = 1.0f; // Main 4kW SSR duty cycle: 0.0f (0%) to 1.0f (100%)
 
 void loop_ssr_control(void)
 {
@@ -35,14 +35,14 @@ void loop_ssr_control(void)
   bool temp_safe = (temp1 <= htrs_maxtemp);
   bool level_safe = !tank_empty;
   bool safety_safe = htrs_enable && !htrs_forcedisable && level_safe && temp_safe;
-  bool aux_relay_on = (getrelay(RPHEATERA) == RON);
+  bool main_relay_on = (getrelay(RPHEATER) == RON);
 
-  unsigned long on_duration = (unsigned long)(constrain(ssr_aux_duty, 0.0f, 1.0f) * SSR_WINDOW_MS);
+  unsigned long on_duration = (unsigned long)(constrain(ssr_main_duty, 0.0f, 1.0f) * SSR_WINDOW_MS);
 
-  if (aux_relay_on && safety_safe && (now - ssr_window_start < on_duration) && on_duration > 0) {
-    digitalWrite(SSR_AUX_PIN, HIGH);
+  if (main_relay_on && safety_safe && (now - ssr_window_start < on_duration) && on_duration > 0) {
+    digitalWrite(SSR_MAIN_PIN, HIGH);
   } else {
-    digitalWrite(SSR_AUX_PIN, LOW);
+    digitalWrite(SSR_MAIN_PIN, LOW);
   }
 }
 
@@ -67,7 +67,7 @@ void loop_heaters(void)
 
   // Force heaters off immediately if disabled or unsafe (Safety cut-out bypasses the lockout)
   if( !htrs_enable || htrs_forcedisable || !level_safe || !temp_safe ) {
-    digitalWrite(SSR_AUX_PIN, LOW);
+    digitalWrite(SSR_MAIN_PIN, LOW);
     if( getrelay(RPHEATER)==RON || getrelay(RPHEATERA)==RON ) {
       String reason = "Safety Cutout: Heaters forced OFF because: ";
       if (!htrs_enable) reason += "[Not enabled by state] ";
@@ -449,11 +449,10 @@ void loop_tempcontrol(void)
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        loop_aux_power_supervisor();
+        loop_main_power_supervisor();
 
-        // Main heater (4kW) is ON. Aux relay (2kW) is ON if duty > 0 (modulated by SSR slow-PWM)
-        setrelay_en(RPHEATER, RON);
-        setrelay_en(RPHEATERA, (ssr_aux_duty > 0.01f) ? RON : ROFF);
+        // Main heater (4kW) is ON if duty > 0 (modulated by SSR slow-PWM on GPIO 33)
+        setrelay_en(RPHEATER, (ssr_main_duty > 0.01f) ? RON : ROFF);
 
         loop_tempcontrolwithspeed();
       }
@@ -485,9 +484,11 @@ void loop_tempcontrolwithheater(void)
   if( temp1 < target - TOLERANCE ) {
     setrelay_en(RPHEATER, RON);
     setrelay_en(RPHEATERA, RON);
+    ssr_main_duty = 1.0f;
   } else if ( temp1 > target + TOLERANCE ) {
     setrelay_en(RPHEATER, ROFF);
     setrelay_en(RPHEATERA, ROFF);
+    ssr_main_duty = 0.0f;
   }
   // If inside the deadband, do nothing to prevent relay chatter.
 }
@@ -500,53 +501,60 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
-void loop_aux_power_supervisor(void)
+void loop_main_power_supervisor(void)
 {
   static unsigned long last_eval = 0;
   unsigned long now = millis();
 
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
-    ssr_aux_duty = 1.0f; // Start with full 100% power during softstart
+    ssr_main_duty = 1.0f; // Start with full 100% power during softstart
+    setrelay_en(RPHEATERA, RON); // Both heaters active for full 6 kW start
     last_eval = now;
     return;
   }
 
-  // 30-second slow supervisory timebase (aligned with 30-60s physical thermal time constant)
-  if (now - last_eval < 30000) return;
+  // 15-second supervisory timebase (responsive enough to prevent tank level drain, smooth for thermal inertia)
+  if (now - last_eval < 15000) return;
   last_eval = now;
 
   float rec_pwm = sc_setperc[RPUMPR];
-  float prev_duty = ssr_aux_duty;
+  float prev_duty = ssr_main_duty;
+  bool aux_on = (getrelay_en(RPHEATERA) == RON);
 
-  if (temp1 >= temp_setpoint + 1.0f) {
-    // Over-temperature guard: gently trim Aux SSR duty by 5%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.05f);
-    if (ssr_aux_duty != prev_duty) {
-      btLog("Overtemp (T > SP+1.0C): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
+  if (temp1 >= temp_setpoint + 1.2f) {
+    // Severe over-temperature: trim Main SSR or shed Aux heater
+    if (ssr_main_duty > 0.10f) {
+      ssr_main_duty = max(0.0f, ssr_main_duty - 0.15f);
+    } else if (aux_on) {
+      setrelay_en(RPHEATERA, ROFF); // Shed 2kW Aux
+      ssr_main_duty = 0.40f;        // 1.6 kW total
+      btLog("Severe overtemp (T > SP+1.2C): Shed Aux heater -> Main 40% (1.6 kW)");
     }
+  } else if (temp1 >= temp_setpoint + 0.8f) {
+    // Moderate over-temperature: step down Main SSR duty by 10%
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
   } else if (rec_pwm >= 85.0f) {
-    // Critical headroom limit: trim Aux SSR duty by 5%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.05f);
-    if (ssr_aux_duty != prev_duty) {
-      btLog("Headroom critical (Rec >= 85%): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
-    }
+    // Critical hydraulic headroom limit: trim Main SSR duty by 10%
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
   } else if (rec_pwm >= 75.0f) {
-    // Approaching headroom limit: gently trim Aux SSR duty by 3%
-    ssr_aux_duty = max(0.0f, ssr_aux_duty - 0.03f);
-    if (ssr_aux_duty != prev_duty) {
-      btLog("Headroom approaching (Rec >= 75%): Trim Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
-    }
-  } else if (rec_pwm <= 70.0f && temp1 <= temp_setpoint + 0.4f) {
-    // Safe headroom & temp stable: gently creep Aux SSR duty back up (+3% per 30s)
-    if (ssr_aux_duty < 1.0f) {
-      ssr_aux_duty = min(1.0f, ssr_aux_duty + 0.03f);
-      if (ssr_aux_duty != prev_duty) {
-        btLog("Headroom clear (Rec <= 70%): Creep Aux SSR to " + String((int)(ssr_aux_duty * 100.0f + 0.5f)) + "% (" + String(4.0f + 2.0f * ssr_aux_duty, 1) + " kW)");
-      }
+    // Approaching headroom limit: gently trim Main SSR duty by 5%
+    ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
+  } else if (rec_pwm <= 70.0f && temp1 <= temp_setpoint + 0.3f) {
+    // Safe headroom & temp stable: creep Main SSR duty back up
+    if (!aux_on && ssr_main_duty >= 0.90f) {
+      setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
+      ssr_main_duty = 0.50f;       // 4.0 kW total
+      btLog("Headroom clear: Restore Aux heater -> Main 50% (4.0 kW)");
+    } else if (ssr_main_duty < 1.0f) {
+      ssr_main_duty = min(1.0f, ssr_main_duty + 0.05f);
     }
   }
-  // Deadband between 70% and 75% Rec PWM: duty is held constant
+
+  float total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
+  if (ssr_main_duty != prev_duty) {
+    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "%)");
+  }
 }
 
 void setup_tempcontrolwithspeed(void)
@@ -562,7 +570,7 @@ void setup_tempcontrolwithspeed(void)
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
-  ssr_aux_duty = 1.0f; // Initialize Aux SSR to 100% full power
+  ssr_main_duty = 1.0f; // Initialize Main SSR to 100% full power (4 kW)
 }
 
 void loop_tempcontrolwithspeed(void)

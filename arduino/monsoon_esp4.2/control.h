@@ -58,10 +58,12 @@ extern int htrs_enable;
 extern int htrs_changed;
 extern bool pump_safety_veto;
 extern bool inlet_safety_veto;
-extern float ssr_aux_duty; // Aux SSR duty cycle: 0.0f (0%) to 1.0f (100%)
+extern float ssr_main_duty; // Main 4kW SSR duty cycle: 0.0f (0%) to 1.0f (100%)
+#define ssr_aux_duty ssr_main_duty // Backward compatibility alias
 void loop_heaters(void);
 void loop_ssr_control(void);
-void loop_aux_power_supervisor(void);
+void loop_main_power_supervisor(void);
+#define loop_aux_power_supervisor loop_main_power_supervisor
 void loop_pumps_and_valves(void);
 
 

@@ -158,46 +158,46 @@
         </div>
       </div>
 
-      <!-- Aux Heater SSR Duty Tuning -->
+      <!-- Main Heater SSR Duty Tuning -->
       <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm space-y-4">
         <div class="flex items-center justify-between border-b border-gray-800 pb-2">
-          <h2 class="text-md font-semibold text-gray-300">AUX HEATER (2 kW SSR)</h2>
+          <h2 class="text-md font-semibold text-gray-300">MAIN HEATER (4 kW SSR)</h2>
           <span class="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Duty &plusmn;5%</span>
         </div>
 
         <div class="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-3">
           <div class="flex items-center justify-between">
             <div>
-              <div class="text-xs text-gray-400 font-medium">Aux Element Duty (D/d)</div>
-              <div class="text-xl font-bold text-amber-400"><span id="aux-duty-val">100</span>% <span id="aux-kw-val" class="text-xs text-gray-500 font-normal">(2.0 kW)</span></div>
+              <div class="text-xs text-gray-400 font-medium">Main Element Duty (D/d)</div>
+              <div class="text-xl font-bold text-amber-400"><span id="aux-duty-val">100</span>% <span id="aux-kw-val" class="text-xs text-gray-500 font-normal">(4.0 kW)</span></div>
             </div>
             <div class="flex gap-2">
-              <button onclick="sendCommand('d')" title="Decrease Aux Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">-5%</button>
-              <button onclick="sendCommand('D')" title="Increase Aux Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">+5%</button>
+              <button onclick="sendCommand('d')" title="Decrease Main Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">-5%</button>
+              <button onclick="sendCommand('D')" title="Increase Main Heater Duty by 5%" class="bg-gray-800 hover:bg-gray-700 text-white font-bold w-10 h-10 rounded-lg border border-gray-700 flex items-center justify-center text-sm shadow transition">+5%</button>
             </div>
           </div>
 
           <!-- Slider -->
           <div class="space-y-1">
             <input type="range" id="aux-duty-slider" min="0" max="100" step="5" value="100"
-              oninput="document.getElementById('aux-duty-val').innerText = this.value; document.getElementById('aux-kw-val').innerText = '(' + (2.0 * this.value / 100).toFixed(1) + ' kW)';"
+              oninput="document.getElementById('aux-duty-val').innerText = this.value; document.getElementById('aux-kw-val').innerText = '(' + (4.0 * this.value / 100).toFixed(1) + ' kW)';"
               onchange="sendCommand('d' + this.value)"
               class="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-amber-500">
             <div class="flex justify-between text-[10px] text-gray-500 font-mono">
               <span>0% (OFF)</span>
-              <span>25%</span>
-              <span>50% (1kW)</span>
-              <span>75%</span>
-              <span>100% (2kW)</span>
+              <span>25% (1kW)</span>
+              <span>50% (2kW)</span>
+              <span>75% (3kW)</span>
+              <span>100% (4kW)</span>
             </div>
           </div>
 
           <!-- Quick Presets -->
           <div class="grid grid-cols-4 gap-1.5 pt-1">
             <button onclick="setAuxDuty(0)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">0%</button>
-            <button onclick="setAuxDuty(33)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">33%</button>
-            <button onclick="setAuxDuty(66)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">66%</button>
-            <button onclick="setAuxDuty(100)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">100%</button>
+            <button onclick="setAuxDuty(25)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">25% (1kW)</button>
+            <button onclick="setAuxDuty(50)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">50% (2kW)</button>
+            <button onclick="setAuxDuty(100)" class="bg-gray-800 hover:bg-gray-700 text-xs py-1 rounded border border-gray-700 text-gray-300 font-medium">100% (4kW)</button>
           </div>
         </div>
       </div>
@@ -1035,20 +1035,22 @@
       sendCommand('O');
     }
 
-    // Aux Heater SSR Duty Helpers
+    // Main Heater SSR Duty Helpers
     function setAuxDuty(val) {
       sendCommand('d' + val);
       updateAuxDutyUI(val);
     }
+    const setMainDuty = setAuxDuty;
 
     function updateAuxDutyUI(pct) {
       const valEl = document.getElementById('aux-duty-val');
       const kwEl = document.getElementById('aux-kw-val');
       const slider = document.getElementById('aux-duty-slider');
       if (valEl) valEl.innerText = pct;
-      if (kwEl) kwEl.innerText = '(' + (2.0 * pct / 100.0).toFixed(1) + ' kW)';
+      if (kwEl) kwEl.innerText = '(' + (4.0 * pct / 100.0).toFixed(1) + ' kW)';
       if (slider && document.activeElement !== slider) slider.value = pct;
     }
+    const updateMainDutyUI = updateAuxDutyUI;
 
     // Outbound Command Emitter
     function sendCommand(charCmd) {

@@ -533,7 +533,7 @@ void loop_autowarm(void)
         btLog("Entering WARM: Preparing shower circulation.");
         temp_controlmode = TCNONE; // loop_autowarm manages staged heaters directly
         htrs_enable = 1;
-        ssr_aux_duty = 1.0f;
+        ssr_main_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
         setrelay_en(RPHEATERA, RON);
         auto_wtopupenable = 1; // Keep tank full as safety fallback only
@@ -553,9 +553,9 @@ void loop_autowarm(void)
         setpump_en(RPUMPD, RON);
         setpump_lpm(RPUMPD, 3.8f);
         auto_scavengecontrolenable = 1;
-        // Engage full 6 kW (Main 4kW + Aux 2kW at 100% duty)
+        // Engage full 6 kW (Main 4kW on SSR @ 100% + Aux 2kW)
         htrs_enable = 1;
-        ssr_aux_duty = 1.0f;
+        ssr_main_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
         setrelay_en(RPHEATERA, RON);
       }
@@ -588,19 +588,23 @@ void loop_autowarm(void)
         last_stage_eval = millis();
 
         if (temp1 < temp_setpoint - 1.2f) {
-          // Stage 3 (6 kW: Main ON, Aux ON)
+          // Stage 3 (6 kW: Main ON @ 100%, Aux ON)
+          ssr_main_duty = 1.0f;
           setrelay_en(RPHEATER, RON);
           setrelay_en(RPHEATERA, RON);
         } else if (temp1 < temp_setpoint - 0.4f) {
-          // Stage 2 (4 kW: Main ON, Aux OFF)
+          // Stage 2 (4 kW: Main ON @ 100%, Aux OFF)
+          ssr_main_duty = 1.0f;
           setrelay_en(RPHEATER, RON);
           setrelay_en(RPHEATERA, ROFF);
         } else if (temp1 < temp_setpoint + 0.3f) {
           // Stage 1 (2 kW: Main OFF, Aux ON) - matches environmental heat loss perfectly
+          ssr_main_duty = 0.0f;
           setrelay_en(RPHEATER, ROFF);
           setrelay_en(RPHEATERA, RON);
         } else {
           // Stage 0 (0 kW: Both OFF)
+          ssr_main_duty = 0.0f;
           setrelay_en(RPHEATER, ROFF);
           setrelay_en(RPHEATERA, ROFF);
         }
@@ -634,7 +638,7 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
         htrs_enable = 1;
-        ssr_aux_duty = 1.0f;
+        ssr_main_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
         setrelay_en(RPHEATERA, RON);
         temp_controlmode = TCSPEED;
@@ -649,7 +653,7 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("WASH: Soft-start circulation ramping.");
         htrs_enable = 1;
-        ssr_aux_duty = 1.0f;
+        ssr_main_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
         setrelay_en(RPHEATERA, RON);
         setrelay_en(RPDELIVER, RON);
@@ -1283,7 +1287,7 @@ void auto_switchstate(int state, String reason)
   rpinsen_reset();
   if (auto_state == STATE_WARM || auto_state == STATE_WASH || auto_state == STATE_WARM1 || auto_state == STATE_WASH1) {
     htrs_enable = 1;
-    ssr_aux_duty = 1.0f;
+    ssr_main_duty = 1.0f;
     setrelay_en(RPHEATER, RON);
     setrelay_en(RPHEATERA, RON);
   }
