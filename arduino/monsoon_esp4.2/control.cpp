@@ -539,30 +539,31 @@ void loop_main_power_supervisor(void)
   float rec_pwm = sc_setperc[RPUMPR];
   float prev_duty = ssr_main_duty;
 
-  // --- MODEL-PREDICTIVE SUPERVISOR LOGIC ---
-  // The fast flow PID regulates instantaneous temperature by speeding up delivery pump.
-  // The supervisor hunts for maximum flow by creeping power up, pre-empted ONLY by
-  // the 45s predictive overheat guard or the 80% recovery pump limit.
+  // --- CLEAN HYDRAULIC HEADROOM SUPERVISOR ---
+  // The fast inner PID regulates instantaneous temperature by speeding up delivery pump.
+  // The outer supervisor hunts for maximum flow by creeping heater power up,
+  // pre-empted ONLY by real hydraulic recovery limits or actual hardware temperature saturation.
 
-  if (temp_pred_45s >= temp_setpoint + 1.2f || temp1 >= temp_setpoint + 1.2f) {
-    // Severe overheat projected: shed 400 W (10% Main duty) or shed 2 kW Aux
+  if (temp1 >= temp_setpoint + 1.2f) {
+    // Severe actual overheat (delivery pump saturated at physical max):
+    // Shed 400 W (10% Main duty) or shed 2 kW Aux
     if (ssr_main_duty > 0.10f) {
       ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
     } else if (aux_on) {
       setrelay_en(RPHEATERA, ROFF);
       ssr_main_duty = 0.50f;
-      btLog("Pred 45s severe overtemp (" + String(temp_pred_45s, 1) + "C): Shed Aux -> Main 50%");
+      btLog("Actual severe overtemp (T=" + String(temp1, 1) + "C): Shed Aux -> Main 50%");
     }
-  } else if (rec_pwm >= 85.0f || temp_pred_45s >= temp_setpoint + 0.7f) {
-    // Critical hydraulic limit (Rec >= 85%) OR predicted overheat (+0.7C in 45s):
+  } else if (rec_pwm >= 85.0f) {
+    // Critical hydraulic limit: recovery pump working near max capacity.
     // Trim back 200 W (5% Main duty) to protect pan level
     ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
   } else if (rec_pwm >= 80.0f) {
     // Approaching hydraulic recovery limit: gently trim 100 W (2.5% Main duty)
     ssr_main_duty = max(0.0f, ssr_main_duty - 0.025f);
-  } else if (rec_pwm <= 75.0f && temp_pred_45s <= temp_setpoint + 0.2f && temp1 <= temp_setpoint + 0.3f) {
+  } else if (rec_pwm <= 75.0f && temp1 <= temp_setpoint + 0.3f) {
     // MONSOON FLOW CREEP:
-    // Recovery has comfortable headroom (<75%), and 45s prediction indicates no thermal runaway.
+    // Recovery has comfortable headroom (<75%), and temperature is under control.
     // Confidently creep power up (+140 W / +3.5% duty per 15s) to push delivery flow higher!
     if (!aux_on && ssr_main_duty >= 0.90f) {
       setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
@@ -572,11 +573,11 @@ void loop_main_power_supervisor(void)
       ssr_main_duty = min(1.0f, ssr_main_duty + 0.035f); // +140 W creep (+3.5% duty)
     }
   }
-  // Deadband: When 75% <= rec_pwm < 80% or temp_pred is balanced: hold steady (zero hunting).
+  // Sweet Spot Deadband (75% <= rec_pwm < 80%): hold power steady (zero fighting with flow PID).
 
   total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
   if (ssr_main_duty != prev_duty) {
-    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "% | Tpred45s=" + String(temp_pred_45s, 1) + "C)");
+    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "% | Temp=" + String(temp1, 1) + "C)");
   }
 }
 

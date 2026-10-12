@@ -759,10 +759,10 @@
               if (kwEl) kwEl.innerText = totalKw.toFixed(1);
             }
           }
-          if (mParts.length >= 4) {
-            const auxPct = parseInt(mParts[3]);
-            if (!isNaN(auxPct)) {
-              updateAuxDutyUI(auxPct);
+          if (mParts.length >= 5) {
+            const mainPct = parseInt(mParts[4]);
+            if (!isNaN(mainPct)) {
+              updateAuxDutyUI(mainPct);
             }
           }
           break;
