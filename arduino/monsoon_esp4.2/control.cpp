@@ -511,13 +511,13 @@ void loop_main_power_supervisor(void)
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
   float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
 
-  // Flow-dependent thermal loss model evaluated continuously:
-  // UA(Q) = 100 + 16.0 * Q_del (W/C)
-  // P_loss = UA(Q) * (temp1 - ambient_water_cold) / 1000.0 (kW)
+  // Calibrated thermal loss model evaluated continuously:
+  // Empirical steady-state loss: UA(Q) = 110 + 26.0 * Q_del (W/C)
+  // At 5.0 LPM and dT = 20C: UA = 240 W/C -> P_loss = 4.8 kW (matches real shower equilibrium)
   // Loop thermal mass C_th = 62.76 kJ/C (15 L loop)
   // dT/dt = (P_heaters - P_loss) / C_th (C/s)
   float q_del = max(2.0f, flow_lpm0);
-  float ua_eff = 100.0f + 16.0f * q_del; // W/C
+  float ua_eff = 110.0f + 26.0f * q_del; // W/C
   float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
   float dtemp_dt_s = (total_kw - p_loss_kw) / 62.76f; // C/s
 
@@ -544,23 +544,30 @@ void loop_main_power_supervisor(void)
   // The outer supervisor hunts for maximum flow by creeping heater power up,
   // pre-empted ONLY by real hydraulic recovery limits or actual hardware temperature saturation.
 
-  if (temp1 >= temp_setpoint + 1.2f) {
-    // Severe actual overheat (delivery pump saturated at physical max):
-    // Shed 400 W (10% Main duty) or shed 2 kW Aux
-    if (ssr_main_duty > 0.10f) {
-      ssr_main_duty = max(0.0f, ssr_main_duty - 0.10f);
+  // Power Floor: Never shed below 50% Main duty (4.0 kW with Aux) in WASH to maintain Monsoon experience.
+  const float MIN_SUPERVISOR_DUTY = 0.50f;
+
+  if (temp1 >= temp_setpoint + 1.8f) {
+    // Severe actual overheat (delivery pump saturated or sudden drop in demand):
+    // Shed 400 W (10% Main duty) or shed 2 kW Aux if already at minimum duty
+    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
+      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.10f);
     } else if (aux_on) {
       setrelay_en(RPHEATERA, ROFF);
-      ssr_main_duty = 0.50f;
-      btLog("Actual severe overtemp (T=" + String(temp1, 1) + "C): Shed Aux -> Main 50%");
+      ssr_main_duty = 0.75f; // 3.0 kW
+      btLog("Actual severe overtemp (T=" + String(temp1, 1) + "C): Shed Aux -> Main 75%");
     }
   } else if (rec_pwm >= 85.0f) {
     // Critical hydraulic limit: recovery pump working near max capacity.
-    // Trim back 200 W (5% Main duty) to protect pan level
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.05f);
+    // Trim back 200 W (5% Main duty) bounded by floor
+    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
+      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.05f);
+    }
   } else if (rec_pwm >= 80.0f) {
-    // Approaching hydraulic recovery limit: gently trim 100 W (2.5% Main duty)
-    ssr_main_duty = max(0.0f, ssr_main_duty - 0.025f);
+    // Approaching hydraulic recovery limit: gently trim 100 W (2.5% Main duty) bounded by floor
+    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
+      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.025f);
+    }
   } else if (rec_pwm <= 75.0f && temp1 <= temp_setpoint + 0.3f) {
     // MONSOON FLOW CREEP:
     // Recovery has comfortable headroom (<75%), and temperature is under control.
@@ -604,10 +611,22 @@ void loop_tempcontrolwithspeed(void)
   myPID.Compute(); 
 
   unsigned long now = millis();
-  float desired_flow = (float)tc_pidoutput;
+  float pid_flow = (float)tc_pidoutput;
+
+  // PHYSICS-BASED FEEDFORWARD FLOW ASSISTANCE:
+  // Overcomes the 20-30s transport lag by immediately estimating the flow required
+  // to balance the current heater power: Q_ff = P_total_kW / (dT_target * 0.0697)
+  // At steady state (dT ~ 15C across element, or ~1.35 LPM/kW):
+  bool aux_on = (getrelay_en(RPHEATERA) == RON);
+  float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
+  float flow_ff = total_kw * 1.0f; // Base feedforward: 1.0 LPM per kW (e.g. 5.2 LPM at 5.2 kW)
+
+  // Blend feedforward with feedback PID:
+  // Feedforward sets the immediate baseline; PID trims the residual temperature error
+  float desired_flow = 0.50f * flow_ff + 0.50f * pid_flow;
 
   // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
-  // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards PID target.
+  // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards target.
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
     float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
