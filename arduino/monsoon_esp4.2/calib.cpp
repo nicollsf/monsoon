@@ -364,8 +364,14 @@ void loop_autocalibt(void)
 
     case CALIBT_COOL_DECAY: {
       // Phase 4: Zero-power thermal decay at 5.0 LPM
+      // Target: Decay until 5 degrees above ambient (or 10 minutes max, whichever first)
+      float amb_ref = (baseline_temp > 10.0f) ? baseline_temp : ambient_water_cold;
+      float decay_target_temp = amb_ref + 5.0f;
+      const unsigned long MAX_DECAY_DURATION = 600000; // 10 minutes (600,000 ms)
+
       if( just_entered ) {
-        btLog("CALIBT Phase 4: Heaters 0% (0 kW). Logging temperature decay at 5.0 LPM for 180s.");
+        btLog("CALIBT Phase 4: Heaters 0% (0 kW). Logging temperature decay at 5.0 LPM towards " + 
+              String(decay_target_temp, 1) + " C (Amb+5C or 10 min max).");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
@@ -378,9 +384,17 @@ void loop_autocalibt(void)
       }
 
       unsigned long decay_elapsed = millis() - substate_start_time;
-      // Log cooling decay for 180 seconds (3 minutes)
-      if (decay_elapsed >= 180000) {
-        btLog("CALIBT Phase 4 complete. Final temp: " + String(temp1, 2) + " C.");
+      bool target_reached = (temp1 <= decay_target_temp);
+      bool timeout = (decay_elapsed >= MAX_DECAY_DURATION);
+
+      // Log cooling decay until within 5C of ambient or 10 minutes
+      if (target_reached || timeout) {
+        if (target_reached) {
+          btLog("CALIBT Phase 4 complete: Temperature reached " + String(temp1, 2) + " C (Amb+5C reached in " + 
+                String(decay_elapsed / 1000) + "s).");
+        } else {
+          btLog("CALIBT Phase 4 complete: 10-minute timeout reached. Final temp: " + String(temp1, 2) + " C.");
+        }
         calib_archive_log();
         auto_switchsubstate(CALIBT_DONE);
       }
