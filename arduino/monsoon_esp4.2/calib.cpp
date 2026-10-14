@@ -200,12 +200,13 @@ void loop_autocalibp(void)
 }
 
 
-// Auto calibrate temperature
+// Auto calibrate temperature (5 LPM step response & thermal lag characterization)
 enum autocalibt_states {
   CALIBT_NONE = 0,
-  CALIBT_OVERSCAVENGE,
-  CALIBT_PREWARM,
-  CALIBT_TEMPRESP,
+  CALIBT_BASELINE_IDLE,  // 1-2 min at 5 LPM with 0 kW heaters to reach flat baseline T0
+  CALIBT_STEP_HEAT,      // Full 6 kW step test at 5 LPM until water reaches 50.0 C
+  CALIBT_STABILIZE_HOLD, // Step down to ~4.8 kW (estimated 5 LPM hold) to observe steady-state
+  CALIBT_COOL_DECAY,     // 0 kW heaters at 5 LPM to measure thermal decay / lag
   CALIBT_DONE
 };
 
@@ -215,213 +216,180 @@ struct TempLogPoint {
   float flow0;
   float flow1;
   uint8_t target_lpm_x10;
+  uint8_t power_kw_x10;
 } __attribute__((packed));
 std::vector<TempLogPoint> temp_response_log;
 
-const char *autocalibt_statestrs[] = {"NONE", "OVERSCAVENGE", "PREWARM", "TEMPRESP", "DONE", "WTF"};
+const char *autocalibt_statestrs[] = {"NONE", "BASELINE", "STEP_HEAT", "STABILIZE", "COOL_DECAY", "DONE", "WTF"};
 void loop_autocalibt(void)
 {
   static int last_substate = -1;
-  float target_lpm_low, target_lpm_high, current_target_lpm;
+  static unsigned long last_sample_time = 0;
+  static unsigned long substate_start_time = 0;
+  static float baseline_temp = 0.0f;
 
-  const float CALIB_TARGET_TEMP = temp_setpoint; // The desired center-point for calibration based on user preference.
-  const float CALIB_DEVIATION = 3.0f;    // The +/- range to explore around the target.
+  const float CALIB_FLOW_LPM = 5.0f;       // Fixed delivery flow rate for test
+  const float TARGET_HEAT_TEMP = 50.0f;     // Target heating ceiling
+  const float MAX_SAFETY_TEMP = 55.0f;      // Abort threshold
 
   if( auto_state!=STATE_CALIBT ) return;
   auto_substatestrs = autocalibt_statestrs;
 
   bool just_entered = (last_substate != auto_substate);
   last_substate = auto_substate;
+
+  if (just_entered) {
+    substate_start_time = millis();
+  }
+
+  // Periodic 1-second data logging into temp_response_log
+  if (millis() - last_sample_time >= 1000) {
+    last_sample_time = millis();
+    bool aux_on = (getrelay_en(RPHEATERA) == RON);
+    float current_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
+
+    TempLogPoint p;
+    p.time_sec = (uint16_t)((millis() - auto_statestime) / 1000);
+    p.temp_c = temp1;
+    p.flow0 = flow_lpm0;
+    p.flow1 = flow_lpm1_est;
+    p.target_lpm_x10 = (uint8_t)(CALIB_FLOW_LPM * 10);
+    p.power_kw_x10 = (uint8_t)(current_kw * 10.0f + 0.5f);
+    temp_response_log.push_back(p);
+  }
   
   switch( auto_substate ) {
     case CALIBT_NONE:
       if( just_entered ) {
+        btLog("CALIBT: Initializing 5.0 LPM Thermal Lag & Step Test.");
         auto_wtopupenable = 0;
+        auto_woverflowstopenable = 1;
+        auto_scavengecontrolenable = 1; // Closed-loop recovery matching WASH
+        temp_controlmode = TCNONE;      // Direct manual control of heaters in this state
         htrs_enable = 1;
-        temp_controlmode = TCON;
-        auto_woverflowstopenable = 1;
-        btLog("Entering CALIBT_NONE");
-        calib_cind = -1;
-      }
-      Serial.println("Switching substate to CALIBT_OVERSCAVENGE");
-      auto_switchsubstate(CALIBT_OVERSCAVENGE);
-      break;
-
-    case CALIBT_OVERSCAVENGE:
-      target_lpm_high = 0.666f * modeld.maxflow;
-
-      if( just_entered ) {
-        setrelay_en(RPDELIVER, RON);  
-        setpump_en(RPUMPR, RON);  
-        setpump_en(RPUMPD, RON); 
-        
-        // Phase 1: Over-scavenge to ensure shower base is empty (minimal charge)
-        setpump_perc(RPUMPR, 100);  
-        setpump_lpm(RPUMPD, target_lpm_high);
-
-        // Enable occasional top-up to prevent running dry, with a longer interval
-        auto_wtopup_interval = 20000; // 20 seconds
-        auto_wtopupenable = 1;
-      }
-
-      // Wait for pan to clear and tank to fill
-      if( tank_full && (millis() - auto_substatestime > 15000) ) {
-        Serial.println("Switching substate to CALIBT_PREWARM");
-        calib_cind = -1;
-        auto_switchsubstate(CALIBT_PREWARM); 
-      }
-      break;
-
-    case CALIBT_PREWARM: {
-      const float PREWARM_TARGET = CALIB_TARGET_TEMP; 
-      const float TEMP_UPPER = CALIB_TARGET_TEMP + CALIB_DEVIATION; // Upper limit of investigation range
-      float base_lpm = 0.10f * modeld.maxflow; // Low flow to minimise circuit heat loss
-      float pulse_lpm = 0.70f * modeld.maxflow; // Periodic pulse to guarantee mixing
-      unsigned long cycle_time = (millis() - auto_substatestime) % 30000; // 30s cycle
-      const unsigned long PREWARM_MAX_DURATION = 600000; // 10 minutes
-
-      if( just_entered ) {
-        auto_wtopupenable = 0; // Disable top-up from previous state
-        auto_wtopup_interval = 10000; // Reset to default
-
-        setrelay_en(RPDELIVER, RON);  
-        setpump_en(RPUMPR, RON);  
-        setpump_en(RPUMPD, RON); 
-        setpump_perc(RPUMPR, 100);
-        btLog("Starting PREWARM to " + String(PREWARM_TARGET) + "C.");
-      }
-
-      // Pulse flow for 5 seconds every 30 seconds for good mixing
-      if( cycle_time < 5000 ) {
-        setpump_lpm(RPUMPD, pulse_lpm);
-      } else {
-        setpump_lpm(RPUMPD, base_lpm);
-      }
-
-      if( temp1 >= TEMP_UPPER ) {
-        btLog("Tank above investigation range (" + String(temp1) + "C). Switching to TEMPRESP.");
-        auto_switchsubstate(CALIBT_TEMPRESP);
-      } else if( temp1 >= PREWARM_TARGET ) {
-        btLog("Prewarm target reached (" + String(temp1) + "C). Switching to TEMPRESP.");
-        auto_switchsubstate(CALIBT_TEMPRESP);
-      } else if( millis() - auto_substatestime >= PREWARM_MAX_DURATION ) {
-        btLog("ERROR: Prewarm timeout (10 min). Could not reach " + String(PREWARM_TARGET) + "C. Aborting.");
-        auto_switchsubstate(CALIBT_DONE);
-      }
-      break;
-    }
-
-    case CALIBT_TEMPRESP: {
-      static unsigned long last_sample_time = 0;
-      static unsigned long last_step_change_time = 0;
-      static bool is_high_step = false;
-      const float TEMP_LOWER = CALIB_TARGET_TEMP - CALIB_DEVIATION;
-      const float TEMP_UPPER = CALIB_TARGET_TEMP + CALIB_DEVIATION;
-      const float TEMP_MAX = 58.0; // Graceful exit before safety limits trigger
-      const unsigned long CALIB_MAX_DURATION = 1200000; // 20 minutes
-
-      target_lpm_low = 0.333f * modeld.maxflow;
-      target_lpm_high = 0.666f * modeld.maxflow;
-
-      if( just_entered ) {
-        auto_wtopupenable = 0; // Explicitly disable auto-topup to ensure manual inlet control.
-        auto_woverflowstopenable = 1;
-        setrelay_en(RPDELIVER, RON);  setpump_en(RPUMPR, RON);  setpump_en(RPUMPD, RON);  
+        ssr_main_duty = 0.0f;
+        setrelay_en(RPHEATER, ROFF);
+        setrelay_en(RPHEATERA, ROFF);
 
         temp_response_log.clear();
-        temp_response_log.reserve(1000); 
-        calib_lastsettime = millis();
-        last_sample_time = millis();
-        last_step_change_time = millis();
-        is_high_step = (temp1 >= TEMP_UPPER); // Set initial state based on current temp
-        Serial.printf("Starting Temp Response. Targets: %.2f/%.2f LPM\n", target_lpm_low, target_lpm_high);
-        
-        // Clear NVRAM log
+        temp_response_log.reserve(1200);
+
         Preferences p;
         p.begin("calibt", false);
         p.clear();
         p.end();
+      }
+      auto_switchsubstate(CALIBT_BASELINE_IDLE);
+      break;
 
-        // Overscavenge using recovery pump, rely on auto_woverflowstopenable for limits
-        setpump_perc(RPUMPR, 100);
-        setpump_lpm(RPUMPD, is_high_step ? target_lpm_high : target_lpm_low);
+    case CALIBT_BASELINE_IDLE: {
+      // Phase 1: Unheated baseline at 5.0 LPM with closed-loop scavenge
+      if( just_entered ) {
+        btLog("CALIBT Phase 1: Baseline idle (0 kW @ 5.0 LPM) for 90s to reach thermal equilibrium.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
+        auto_scavengecontrolenable = 1;
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+
+        ssr_main_duty = 0.0f;
+        setrelay_en(RPHEATER, ROFF);
+        setrelay_en(RPHEATERA, ROFF);
       }
 
-      current_target_lpm = is_high_step ? target_lpm_high : target_lpm_low;      
+      unsigned long elapsed = millis() - substate_start_time;
+      // Wait 90 seconds (1.5 min) to reach flat initial baseline
+      if (elapsed >= 90000) {
+        baseline_temp = temp1;
+        btLog("CALIBT: Baseline established at " + String(baseline_temp, 2) + " C. Commencing 6.0 kW Step!");
+        auto_switchsubstate(CALIBT_STEP_HEAT);
+      }
+      break;
+    }
 
-      if( tank_empty ) {
-        btLog("ERROR: Tank level low during Temp Calib. Aborting.");
-        pumpsen_reset();
-        calib_archive_log();
-        auto_switchstate(STATE_CALIBDUMP); // Go directly to dump
-        return;
+    case CALIBT_STEP_HEAT: {
+      // Phase 2: Instantaneous 6 kW step test at 5.0 LPM until 50.0 C
+      if( just_entered ) {
+        btLog("CALIBT Phase 2: 6.0 kW STEP (Main 100% + Aux ON) @ 5.0 LPM. Heating towards " + String(TARGET_HEAT_TEMP, 1) + " C.");
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        auto_scavengecontrolenable = 1;
+
+        ssr_main_duty = 1.0f;
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON); // Full 6 kW
       }
 
-      if( millis()-auto_substatestime < 20000 ) {
-        return;
+      // Check if target temperature reached or safety limit
+      if (temp1 >= TARGET_HEAT_TEMP) {
+        btLog("CALIBT: Target 50 C reached (T=" + String(temp1, 2) + " C). Transitioning to stabilization hold.");
+        auto_switchsubstate(CALIBT_STABILIZE_HOLD);
+      } else if (temp1 >= MAX_SAFETY_TEMP) {
+        btLog("WARNING: Max safety temp reached. Aborting to decay.");
+        auto_switchsubstate(CALIBT_COOL_DECAY);
+      }
+      break;
+    }
+
+    case CALIBT_STABILIZE_HOLD: {
+      // Phase 3: Hold power to stabilize around 50 C
+      // At 5 LPM and dT ~ (50 - 25) = 25 C: equilibrium power is ~4.8 kW (Aux 2kW + Main 70% = 4.8 kW)
+      if( just_entered ) {
+        btLog("CALIBT Phase 3: Stabilizing at ~4.8 kW (Aux ON + Main 70%) @ 5.0 LPM.");
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        auto_scavengecontrolenable = 1;
+
+        setrelay_en(RPHEATERA, RON); // 2 kW
+        ssr_main_duty = 0.70f;        // 2.8 kW (4.8 kW total)
+        setrelay_en(RPHEATER, RON);
       }
 
-      if( millis()-last_sample_time >= 5000 ) {
-        last_sample_time = millis();
-        TempLogPoint p;
-        p.time_sec = (uint16_t)((millis() - auto_substatestime) / 1000);
-        p.temp_c = temp1; // Use the fast NTC sensor the PID actually looks at
-        p.flow0 = flow_lpm0; // Record actual measured flows
-        p.flow1 = flow_lpm1;
-        p.target_lpm_x10 = (uint8_t)(current_target_lpm * 10);
-        temp_response_log.push_back(p);
-      }
+      unsigned long hold_elapsed = millis() - substate_start_time;
 
-      // Determine if the temperature has hit an asymptote (stabilised)
-      bool stable = false;
-      // Must be in the current step for at least 90 seconds to avoid falsely triggering on the turnaround peak
-      if (millis() - last_step_change_time >= 90000 && temp_response_log.size() >= 12) {
-        // Compare the current temperature with the temperature recorded 12 samples (60 seconds) ago at 5s intervals
-        float temp_60s_ago = temp_response_log[temp_response_log.size() - 12].temp_c;
-        if (abs(temp1 - temp_60s_ago) <= 0.2) {
-          stable = true;
+      // Check for stability: after at least 60s, check if temp drift over last 30s is < 0.15 C
+      if (hold_elapsed >= 60000 && temp_response_log.size() >= 30) {
+        float temp_30s_ago = temp_response_log[temp_response_log.size() - 30].temp_c;
+        if (abs(temp1 - temp_30s_ago) <= 0.15f || hold_elapsed >= 180000) { // 3 min max hold
+          btLog("CALIBT: Temperature stabilized at " + String(temp1, 2) + " C (Hold power 4.8 kW). Commencing unheated decay.");
+          auto_switchsubstate(CALIBT_COOL_DECAY);
         }
       }
+      break;
+    }
 
-      // Switching logic based on temperature thresholds OR stabilisation
-      if (!is_high_step && (temp1 >= TEMP_UPPER || stable)) {
-        is_high_step = true;
-        setpump_lpm(RPUMPD, target_lpm_high);
-        last_step_change_time = millis();
-        
-        if (stable) btLog("Heating stabilised at " + String(temp1) + "C. Flow now HIGH (" + String(target_lpm_high) + " LPM)");
-        else btLog("Temp crossed upper boundary (" + String(TEMP_UPPER) + "C). Flow now HIGH (" + String(target_lpm_high) + " LPM)");
-      } else if (is_high_step && (temp1 <= TEMP_LOWER || stable)) {
-        is_high_step = false;
-        setpump_lpm(RPUMPD, target_lpm_low);
-        last_step_change_time = millis();
-        
-        if (stable) btLog("Cooling stabilised at " + String(temp1) + "C. Flow now LOW (" + String(target_lpm_low) + " LPM)");
-        else btLog("Temp crossed lower boundary (" + String(TEMP_LOWER) + "C). Flow now LOW (" + String(target_lpm_low) + " LPM)");
+    case CALIBT_COOL_DECAY: {
+      // Phase 4: Zero-power thermal decay at 5.0 LPM
+      if( just_entered ) {
+        btLog("CALIBT Phase 4: Heaters 0% (0 kW). Logging temperature decay at 5.0 LPM for 180s.");
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        auto_scavengecontrolenable = 1;
+
+        ssr_main_duty = 0.0f;
+        setrelay_en(RPHEATER, ROFF);
+        setrelay_en(RPHEATERA, ROFF);
       }
 
-      // Exit successfully if we hit the max time limit or the maximum safety temperature
-      bool timeout = (millis() - auto_substatestime >= CALIB_MAX_DURATION);
-      bool temp_exceeded = (temp1 >= TEMP_MAX);
-      
-      if( timeout || temp_exceeded ) {
-        if (timeout) btLog("Temp calibration 20-minute duration reached.");
-        if (temp_exceeded) btLog("Temp calibration max temp limit (" + String(TEMP_MAX) + "C) reached.");
+      unsigned long decay_elapsed = millis() - substate_start_time;
+      // Log cooling decay for 180 seconds (3 minutes)
+      if (decay_elapsed >= 180000) {
+        btLog("CALIBT Phase 4 complete. Final temp: " + String(temp1, 2) + " C.");
         calib_archive_log();
         auto_switchsubstate(CALIBT_DONE);
-        return;
       }
       break;
     }
 
     case CALIBT_DONE:
       if( just_entered ) {
+        btLog("CALIBT: Test complete. Switching to CALIBDUMP.");
         auto_woverflowstopenable = 0;
-        //htrs_disable = 0;
+        auto_scavengecontrolenable = 0;
         temp_controlmode = TCNONE;
+        ssr_main_duty = 0.0f;
+        setrelay_en(RPHEATER, ROFF);
+        setrelay_en(RPHEATERA, ROFF);
         pumpsen_reset();
       }
-      auto_switchstate(STATE_CALIBDUMP); // Automatically dump CSV on success
+      auto_switchstate(STATE_CALIBDUMP);
       break;
   }
 }
@@ -474,13 +442,15 @@ void loop_autocalibdump(void)
              p.getBytes("log", buf, len);
              int count = len / sizeof(TempLogPoint);
              TempLogPoint* pts = (TempLogPoint*)buf;
-             Serial.println("Time_sec, Target_LPM, Temp_C, Flow_LPM0, Flow_LPM1");
+             Serial.println("Time_sec, Target_LPM, Power_kW, Temp_C, Flow_LPM0, Flow_LPM1");
              
              mqtt_log("CALIB_TEMP_LOG_START");
              for(int i=0; i<count; i++) {
-               Serial.printf("%d, %.1f, %.2f, %.2f, %.2f\n", pts[i].time_sec, pts[i].target_lpm_x10/10.0f, pts[i].temp_c, pts[i].flow0, pts[i].flow1);
+               float p_kw = pts[i].power_kw_x10 / 10.0f;
+               Serial.printf("%d, %.1f, %.1f, %.2f, %.2f, %.2f\n", pts[i].time_sec, pts[i].target_lpm_x10/10.0f, p_kw, pts[i].temp_c, pts[i].flow0, pts[i].flow1);
                String pts_str = "CALIB_PT: t=" + String(pts[i].time_sec) + 
                                 ", target=" + String(pts[i].target_lpm_x10/10.0f, 1) + 
+                                ", kw=" + String(p_kw, 1) + 
                                 ", temp=" + String(pts[i].temp_c, 2) + 
                                 ", flow0=" + String(pts[i].flow0, 2) + 
                                 ", flow1=" + String(pts[i].flow1, 2);

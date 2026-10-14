@@ -1355,9 +1355,6 @@ void auto_switchstate(int state, String reason)
     case STATE_CALIBP:  auto_nextstate = STATE_CALIBT;  break;
     case STATE_CALIBT:
       auto_nextstate = STATE_CALIBF;
-      // Enforce default intent for CALIBT exactly once on transition
-      setpump_perc(RPUMPR, 100);
-      setpump_en(RPUMPR, RON);
       break;
     case STATE_CALIBF:     auto_nextstate = STATE_CALIBDUMP; break;
     case STATE_CALIBDUMP:  auto_nextstate = STATE_OFF;       break;
