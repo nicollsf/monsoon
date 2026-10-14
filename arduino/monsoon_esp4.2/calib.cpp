@@ -311,8 +311,11 @@ void loop_autocalibt(void)
       // Phase 2: Instantaneous 6 kW step test at 5.0 LPM until 50.0 C
       if( just_entered ) {
         btLog("CALIBT Phase 2: 6.0 kW STEP (Main 100% + Aux ON) @ 5.0 LPM. Heating towards " + String(TARGET_HEAT_TEMP, 1) + " C.");
-        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
         auto_scavengecontrolenable = 1;
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
 
         ssr_main_duty = 1.0f;
         setrelay_en(RPHEATER, RON);
@@ -335,8 +338,11 @@ void loop_autocalibt(void)
       // At 5 LPM and dT ~ (50 - 25) = 25 C: equilibrium power is ~4.8 kW (Aux 2kW + Main 70% = 4.8 kW)
       if( just_entered ) {
         btLog("CALIBT Phase 3: Stabilizing at ~4.8 kW (Aux ON + Main 70%) @ 5.0 LPM.");
-        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
         auto_scavengecontrolenable = 1;
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
 
         setrelay_en(RPHEATERA, RON); // 2 kW
         ssr_main_duty = 0.70f;        // 2.8 kW (4.8 kW total)
@@ -360,8 +366,11 @@ void loop_autocalibt(void)
       // Phase 4: Zero-power thermal decay at 5.0 LPM
       if( just_entered ) {
         btLog("CALIBT Phase 4: Heaters 0% (0 kW). Logging temperature decay at 5.0 LPM for 180s.");
-        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
         auto_scavengecontrolenable = 1;
+        setpump_lpm(RPUMPD, CALIB_FLOW_LPM);
 
         ssr_main_duty = 0.0f;
         setrelay_en(RPHEATER, ROFF);

@@ -1244,9 +1244,10 @@ void auto_switchsubstate(int substate)
   btLog("Entering substate " + String(auto_substatestr));
   auto_substatestime = millis();
 
-  // Don't wipe pump/relay intents when transitioning between active running substates (WASH or WARM)
+  // Don't wipe pump/relay intents when transitioning between active running substates (WASH, WARM, or CALIBT)
   if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE) &&
-      !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD)) {
+      !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD) &&
+      !(auto_state == STATE_CALIBT)) {
     auto_scavenge_integral = 0.0f;
     rpinsen_reset();
     pumpsen_reset();
