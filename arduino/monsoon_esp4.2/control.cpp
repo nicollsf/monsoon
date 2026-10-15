@@ -331,6 +331,37 @@ void pumpcalib_loadmodels() {
   prefs.end();
 }
 
+thermalmodel active_thermal_model = {
+  "shower with roof on and through main shower head",
+  19.5f,   // tau_dead_sec: 19.5s pure transport delay at 4.76 LPM
+  233.0f,  // tau_sec: 233s first-order time constant (R^2 = 0.9955)
+  207.0f,  // ua_w_per_c: 207 W/C steady-state heat loss conductance
+  48.2f,   // c_th_kj_per_c: 48.2 kJ/C effective circulating loop thermal capacity
+  4.76f    // ref_flow_lpm: calibrated reference flow
+};
+
+void thermalmodel_save(const thermalmodel& m) {
+  prefs.begin("therm_models", false);
+  prefs.putBytes("active", &m, sizeof(thermalmodel));
+  prefs.end();
+  btLog("Thermal model saved: " + String(m.label));
+}
+
+void thermalmodel_load(void) {
+  prefs.begin("therm_models", false);
+  if (prefs.isKey("active") && prefs.getBytesLength("active") == sizeof(thermalmodel)) {
+    prefs.getBytes("active", &active_thermal_model, sizeof(thermalmodel));
+    Serial.printf("Sensors: Loaded thermal model '%s' (tau_dead=%.1fs, tau=%.1fs, UA=%.1f W/C)\n",
+                  active_thermal_model.label, active_thermal_model.tau_dead_sec,
+                  active_thermal_model.tau_sec, active_thermal_model.ua_w_per_c);
+  } else {
+    // Save defaults to initialize NVRAM
+    prefs.putBytes("active", &active_thermal_model, sizeof(thermalmodel));
+    Serial.printf("Sensors: Initialized NVRAM with calibrated thermal model '%s'\n", active_thermal_model.label);
+  }
+  prefs.end();
+}
+
 pumpmodel pumpcalib_fit(const std::vector<float>& pwms, const std::vector<float>& flows) {
     float offset = 7.5; // Based on your data, flow starts between 5% and 10%
     float maxF = 0;
@@ -407,6 +438,8 @@ void setup_tempcontrol(void) {
   prefs.begin("temp_control", false);
   temp_setpoint = prefs.getFloat("setpoint", 50.0);
   prefs.end();
+
+  thermalmodel_load();
 }
 
 void save_temp_setpoint(void) {
@@ -511,15 +544,14 @@ void loop_main_power_supervisor(void)
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
   float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
 
-  // Calibrated thermal loss model evaluated continuously:
-  // Empirical steady-state loss: UA(Q) = 110 + 26.0 * Q_del (W/C)
-  // At 5.0 LPM and dT = 20C: UA = 240 W/C -> P_loss = 4.8 kW (matches real shower equilibrium)
-  // Loop thermal mass C_th = 62.76 kJ/C (15 L loop)
-  // dT/dt = (P_heaters - P_loss) / C_th (C/s)
+  // Calibrated thermal loss model evaluated using active thermal model profile:
+  // e.g. "shower with roof on and through main shower head"
+  // Dynamic UA scaled by flow: UA(Q) = UA_ref * (0.5 + 0.5 * (Q / Q_ref))
   float q_del = max(2.0f, flow_lpm0);
-  float ua_eff = 110.0f + 26.0f * q_del; // W/C
+  float q_ratio = q_del / active_thermal_model.ref_flow_lpm;
+  float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio); // W/C
   float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
-  float dtemp_dt_s = (total_kw - p_loss_kw) / 62.76f; // C/s
+  float dtemp_dt_s = (total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c; // C/s
 
   // 45-second predictive lookahead temperature
   temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);

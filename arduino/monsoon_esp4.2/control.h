@@ -42,6 +42,19 @@ void pumpcalib_loadmodels(void);
 float getpwmFromlpm(float targetlpm, pumpmodel m);
 void setpump_lpm(int rpump, float lpm);
 
+// Thermal calibration and stall enclosure profiles
+struct thermalmodel {
+  char label[64];         // Configuration label (e.g. "shower with roof on and through main shower head")
+  float tau_dead_sec;     // Pure transport dead time (s) at ref_flow_lpm
+  float tau_sec;          // First-order heating time constant (s)
+  float ua_w_per_c;       // Thermal loss conductance (W/C)
+  float c_th_kj_per_c;    // Effective loop thermal mass (kJ/C)
+  float ref_flow_lpm;     // Calibrated reference flow rate (LPM)
+};
+extern thermalmodel active_thermal_model;
+void thermalmodel_save(const thermalmodel& m);
+void thermalmodel_load(void);
+
 // Main loop
 void setup_speedcontrol(void);
 void loop_speedcontrol(void);
