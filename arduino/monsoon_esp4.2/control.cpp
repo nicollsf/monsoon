@@ -536,104 +536,143 @@ PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REV
 
 float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
 
+// ----------------------------------------------------------------------
+//   Classical Cascaded Hydraulic-Headroom Power Supervisor
+// ----------------------------------------------------------------------
+// Outer loop: Regulates recovery pump load (PWM1) to setpoint SP_rec (72%)
+// by adjusting total heater power target_kw.
+// Evaluated on a 10-second sample period to ensure frequency separation
+// from the inner 1.5s delivery flow temperature PID.
+// ----------------------------------------------------------------------
+static float power_integral_kw = 4.2f;
+
+void reset_power_supervisor(float initial_kw) {
+  power_integral_kw = constrain(initial_kw, 1.5f, 6.0f);
+  
+  // Set initial hardware states with hysteresis
+  bool aux_on = (power_integral_kw >= 3.0f);
+  setrelay_en(RPHEATERA, aux_on ? RON : ROFF);
+  
+  float aux_kw = aux_on ? 2.0f : 0.0f;
+  float main_kw = max(0.0f, power_integral_kw - aux_kw);
+  ssr_main_duty = constrain(main_kw / 4.0f, 0.0f, 1.0f);
+  setrelay_en(RPHEATER, (ssr_main_duty > 0.01f) ? RON : ROFF);
+  
+  btLog("Power supervisor reset: " + String(power_integral_kw, 1) + " kW (Main " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% + Aux " + (aux_on ? "2kW" : "0kW") + ")");
+}
+
 void loop_main_power_supervisor(void)
 {
   static unsigned long last_eval = 0;
+  static unsigned long last_crit_check = 0;
   unsigned long now = millis();
 
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
   float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
 
-  // Calibrated thermal loss model evaluated using active thermal model profile:
-  // e.g. "shower with roof on and through main shower head"
-  // Dynamic UA scaled by flow: UA(Q) = UA_ref * (0.5 + 0.5 * (Q / Q_ref))
+  // Active thermal model telemetry calculation
   float q_del = max(2.0f, flow_lpm0);
-  float q_ratio = q_del / active_thermal_model.ref_flow_lpm;
+  float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (q_del / active_thermal_model.ref_flow_lpm) : 1.0f;
   float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio); // W/C
   float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
-  float dtemp_dt_s = (total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c; // C/s
+  float dtemp_dt_s = (active_thermal_model.c_th_kj_per_c > 0.1f) ? ((total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c) : 0.0f; // C/s
 
-  // 45-second predictive lookahead temperature
   temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
 
+  // Softstart: Hold starting power steady (4.2 kW) during initial flow ramp
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
-    ssr_main_duty = 1.0f; // Start with full 100% power during softstart
-    setrelay_en(RPHEATERA, RON); // Both heaters active for full 6 kW start
     last_eval = now;
     return;
   }
 
-  // 15-second supervisory timebase
-  if (now - last_eval < 15000) return;
+  float rec_pwm = sc_setperc[RPUMPR];
+
+  // 1. FAST CRITICAL SATURATION CHECK (Evaluated every 1000ms):
+  // If recovery pump reaches 88%+ saturation, immediately drop power to protect pan from flooding
+  if (now - last_crit_check >= 1000) {
+    last_crit_check = now;
+    if (rec_pwm >= 88.0f) {
+      power_integral_kw = max(1.5f, power_integral_kw - 0.40f); // Fast 400W emergency step-down
+    }
+  }
+
+  // 2. CLASSICAL PI SUPERVISORY UPDATE (Evaluated every 10 seconds):
+  // Frequency separation: Outer power loop runs at 10s, giving the inner 1.5s flow PID
+  // plenty of time to stabilize temperature before the next power adjustment.
+  if (now - last_eval < 10000) return;
   last_eval = now;
 
-  float rec_pwm = sc_setperc[RPUMPR];
-  float prev_duty = ssr_main_duty;
+  // Setpoint: 72% recovery PWM. Deadband: +/- 3% (69% to 75% PWM)
+  const float SP_REC_PWM = 72.0f;
+  const float DEADBAND_PWM = 3.0f;
 
-  // --- CLEAN HYDRAULIC HEADROOM SUPERVISOR ---
-  // The fast inner PID regulates instantaneous temperature by speeding up delivery pump.
-  // The outer supervisor hunts for maximum flow by creeping heater power up,
-  // pre-empted ONLY by real hydraulic recovery limits or actual hardware temperature saturation.
-
-  // Power Floor: Never shed below 50% Main duty (4.0 kW with Aux) in WASH to maintain Monsoon experience.
-  const float MIN_SUPERVISOR_DUTY = 0.50f;
-
-  if (temp1 >= temp_setpoint + 1.8f) {
-    // Severe actual overheat (delivery pump saturated or sudden drop in demand):
-    // Shed 400 W (10% Main duty) or shed 2 kW Aux if already at minimum duty
-    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
-      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.10f);
-    } else if (aux_on) {
-      setrelay_en(RPHEATERA, ROFF);
-      ssr_main_duty = 0.75f; // 3.0 kW
-      btLog("Actual severe overtemp (T=" + String(temp1, 1) + "C): Shed Aux -> Main 75%");
-    }
-  } else if (rec_pwm >= 85.0f) {
-    // Critical hydraulic limit: recovery pump working near max capacity.
-    // Trim back 200 W (5% Main duty) bounded by floor
-    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
-      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.05f);
-    }
-  } else if (rec_pwm >= 80.0f) {
-    // Approaching hydraulic recovery limit: gently trim 100 W (2.5% Main duty) bounded by floor
-    if (ssr_main_duty > MIN_SUPERVISOR_DUTY) {
-      ssr_main_duty = max(MIN_SUPERVISOR_DUTY, ssr_main_duty - 0.025f);
-    }
-  } else if (rec_pwm <= 75.0f && temp1 <= temp_setpoint + 0.3f) {
-    // MONSOON FLOW CREEP:
-    // Recovery has comfortable headroom (<75%), and temperature is under control.
-    // Confidently creep power up (+140 W / +3.5% duty per 15s) to push delivery flow higher!
-    if (!aux_on && ssr_main_duty >= 0.90f) {
-      setrelay_en(RPHEATERA, RON); // Restore 2kW Aux
-      ssr_main_duty = 0.50f;       // 4.0 kW total
-      btLog("Headroom clear: Restore Aux heater -> Main 50% (4.0 kW)");
-    } else if (ssr_main_duty < 1.0f) {
-      ssr_main_duty = min(1.0f, ssr_main_duty + 0.035f); // +140 W creep (+3.5% duty)
-    }
+  float error_rec = 0.0f;
+  if (rec_pwm > SP_REC_PWM + DEADBAND_PWM) {
+    error_rec = rec_pwm - (SP_REC_PWM + DEADBAND_PWM); // Positive: recovery pump overloaded
+  } else if (rec_pwm < SP_REC_PWM - DEADBAND_PWM) {
+    error_rec = rec_pwm - (SP_REC_PWM - DEADBAND_PWM); // Negative: recovery pump has headroom
   }
-  // Sweet Spot Deadband (75% <= rec_pwm < 80%): hold power steady (zero fighting with flow PID).
 
-  total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
-  if (ssr_main_duty != prev_duty) {
-    btLog("Power supervisor: Main SSR " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% | Total: " + String(total_kw, 1) + " kW (Rec=" + String(rec_pwm, 0) + "% | Temp=" + String(temp1, 1) + "C)");
+  // Inhibit power increase if water temperature is already at or above setpoint
+  if (temp1 >= temp_setpoint + 0.3f && error_rec < 0.0f) {
+    error_rec = 0.0f;
   }
+
+  // Thermal overtemp shedding if delivery flow PID is overwhelmed (temp > SP + 0.8C)
+  float thermal_shed_kw = 0.0f;
+  if (temp1 > temp_setpoint + 0.8f) {
+    thermal_shed_kw = (temp1 - (temp_setpoint + 0.8f)) * 0.50f; // 0.5 kW per deg C overshoot
+  }
+
+  // Classical PI controller gains:
+  // Kp: proportional reaction to recovery strain (kW per % PWM)
+  // Ki: integral drift per 10-second period (kW per % PWM)
+  const float Kp_rec = 0.035f;
+  const float Ki_rec = 0.015f;
+
+  // Integral update (negative sign because higher rec_pwm requires LOWER power)
+  power_integral_kw -= (Ki_rec * error_rec);
+  power_integral_kw = constrain(power_integral_kw, 1.5f, 6.0f); // Bounded anti-windup
+
+  // Total target power
+  float target_kw = power_integral_kw - (Kp_rec * error_rec) - thermal_shed_kw;
+  target_kw = constrain(target_kw, 1.5f, 6.0f);
+
+  // 3. HARDWARE MAPPING WITH HYSTERESIS (Aux 2kW + Main SSR 0-4kW):
+  // Seamless continuous modulation from 1.5 kW to 6.0 kW with zero relay chatter
+  aux_on = (getrelay_en(RPHEATERA) == RON);
+  if (!aux_on && target_kw >= 3.8f) {
+    setrelay_en(RPHEATERA, RON);
+    aux_on = true;
+  } else if (aux_on && target_kw <= 2.2f) {
+    setrelay_en(RPHEATERA, ROFF);
+    aux_on = false;
+  }
+
+  float aux_kw = aux_on ? 2.0f : 0.0f;
+  float main_kw = max(0.0f, target_kw - aux_kw);
+  ssr_main_duty = constrain(main_kw / 4.0f, 0.0f, 1.0f);
+  setrelay_en(RPHEATER, (ssr_main_duty > 0.01f) ? RON : ROFF);
+
+  float new_total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
+  btLog("Power supervisor (Classical PI): Target " + String(target_kw, 2) + " kW | Act: " + String(new_total_kw, 2) + " kW (Main " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% + Aux " + (aux_on ? "2kW" : "0kW") + ") | Rec=" + String(rec_pwm, 0) + "% | T=" + String(temp1, 1) + "C");
 }
 
 void setup_tempcontrolwithspeed(void)
 {
   // Set the target temperature for the PID controller.
   tc_pidsetpoint = temp_setpoint;
-  // Initialize PID output to conservative starting flow (4.5 LPM)
-  tc_pidoutput = 4.5;
+  // Initialize PID output to conservative starting flow (4.0 LPM)
+  tc_pidoutput = 4.0;
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
-  myPID.SetOutputLimits(3.0, 8.5); 
+  // Set output limits in Litres Per Minute (LPM): 3.0 to 5.0 LPM
+  // (5.0 LPM guarantees delivery never exceeds physical drain pan recovery capacity)
+  myPID.SetOutputLimits(3.0, 5.0); 
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
-  ssr_main_duty = 1.0f; // Initialize Main SSR to 100% full power (4 kW)
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -643,30 +682,18 @@ void loop_tempcontrolwithspeed(void)
   myPID.Compute(); 
 
   unsigned long now = millis();
-  float pid_flow = (float)tc_pidoutput;
+  float desired_flow = (float)tc_pidoutput;
 
-  // PHYSICS-BASED FEEDFORWARD FLOW ASSISTANCE:
-  // Overcomes the 20-30s transport lag by immediately estimating the flow required
-  // to balance the current heater power: Q_ff = P_total_kW / (dT_target * 0.0697)
-  // At steady state (dT ~ 15C across element, or ~1.35 LPM/kW):
-  bool aux_on = (getrelay_en(RPHEATERA) == RON);
-  float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
-  float flow_ff = total_kw * 1.0f; // Base feedforward: 1.0 LPM per kW (e.g. 5.2 LPM at 5.2 kW)
-
-  // Blend feedforward with feedback PID:
-  // Feedforward sets the immediate baseline; PID trims the residual temperature error
-  float desired_flow = 0.50f * flow_ff + 0.50f * pid_flow;
-
-  // 1. Startup Soft-Start (during WASH_SOFTSTART substate):
-  // Rate-limited ramp: Start at 4.5 LPM and ramp at max +0.5 LPM/sec towards target.
+  // Startup Soft-Start (during WASH_SOFTSTART substate):
+  // Rate-limited ramp: Start at 3.5 LPM and ramp smoothly towards target.
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
-    float max_soft_ramp = 4.5f + ((now - auto_substatestime) / 1000.0f) * 0.5f;
+    float max_soft_ramp = 3.5f + ((now - auto_substatestime) / 1000.0f) * 0.4f;
     desired_flow = min(desired_flow, max_soft_ramp);
   }
 
-  // Constrain between absolute operating bounds [3.0, 8.5] LPM
-  desired_flow = constrain(desired_flow, 3.0f, 8.5f);
+  // Constrain between safe bounds [3.0, 5.0] LPM
+  desired_flow = constrain(desired_flow, 3.0f, 5.0f);
 
   setpump_lpm(RPUMPD, desired_flow);
 }
