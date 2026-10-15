@@ -545,9 +545,11 @@ float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
 // from the inner 1.5s delivery flow temperature PID.
 // ----------------------------------------------------------------------
 static float power_integral_kw = 4.2f;
+static float last_rec_pwm = 72.0f;
 
 void reset_power_supervisor(float initial_kw) {
   power_integral_kw = constrain(initial_kw, 1.5f, 6.0f);
+  last_rec_pwm = sc_setperc[RPUMPR];
   
   // Set initial hardware states with hysteresis
   bool aux_on = (power_integral_kw >= 3.0f);
@@ -583,6 +585,7 @@ void loop_main_power_supervisor(void)
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
     last_eval = now;
+    last_rec_pwm = sc_setperc[RPUMPR];
     return;
   }
 
@@ -597,10 +600,11 @@ void loop_main_power_supervisor(void)
     }
   }
 
-  // 2. CLASSICAL PI SUPERVISORY UPDATE (Evaluated every 10 seconds):
+  // 2. CLASSICAL PID SUPERVISORY UPDATE (Evaluated every 10 seconds):
   // Frequency separation: Outer power loop runs at 10s, giving the inner 1.5s flow PID
   // plenty of time to stabilize temperature before the next power adjustment.
   if (now - last_eval < 10000) return;
+  float dt_sec = (last_eval == 0) ? 10.0f : ((now - last_eval) / 1000.0f);
   last_eval = now;
 
   // Setpoint: 72% recovery PWM. Deadband: +/- 3% (69% to 75% PWM)
@@ -614,6 +618,11 @@ void loop_main_power_supervisor(void)
     error_rec = rec_pwm - (SP_REC_PWM - DEADBAND_PWM); // Negative: recovery pump has headroom
   }
 
+  // Derivative Rate-of-Rise (Phase-Lead Damping):
+  // Detects rapid recovery load surges (e.g. onset of overheating) before pump can saturate
+  float d_rec_pwm_dt = (rec_pwm - last_rec_pwm) / dt_sec; // % PWM per second
+  last_rec_pwm = rec_pwm;
+
   // Inhibit power increase if water temperature is already at or above setpoint
   if (temp1 >= temp_setpoint + 0.3f && error_rec < 0.0f) {
     error_rec = 0.0f;
@@ -625,18 +634,25 @@ void loop_main_power_supervisor(void)
     thermal_shed_kw = (temp1 - (temp_setpoint + 0.8f)) * 0.50f; // 0.5 kW per deg C overshoot
   }
 
-  // Classical PI controller gains:
+  // Classical PID controller gains:
   // Kp: proportional reaction to recovery strain (kW per % PWM)
   // Ki: integral drift per 10-second period (kW per % PWM)
+  // Kd: derivative rate-of-surge damping (kW per (%/s) rate of rise)
   const float Kp_rec = 0.035f;
   const float Ki_rec = 0.015f;
+  const float Kd_rec = 0.35f; // Phase-lead damping for recovery surges
+
+  float d_action = 0.0f;
+  if (d_rec_pwm_dt > 0.30f) {
+    d_action = Kd_rec * (d_rec_pwm_dt - 0.30f);
+  }
 
   // Integral update (negative sign because higher rec_pwm requires LOWER power)
   power_integral_kw -= (Ki_rec * error_rec);
   power_integral_kw = constrain(power_integral_kw, 1.5f, 6.0f); // Bounded anti-windup
 
-  // Total target power
-  float target_kw = power_integral_kw - (Kp_rec * error_rec) - thermal_shed_kw;
+  // Total target power (P + I + D + Thermal trim)
+  float target_kw = power_integral_kw - (Kp_rec * error_rec) - d_action - thermal_shed_kw;
   target_kw = constrain(target_kw, 1.5f, 6.0f);
 
   // 3. HARDWARE MAPPING WITH HYSTERESIS (Aux 2kW + Main SSR 0-4kW):
@@ -656,7 +672,7 @@ void loop_main_power_supervisor(void)
   setrelay_en(RPHEATER, (ssr_main_duty > 0.01f) ? RON : ROFF);
 
   float new_total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
-  btLog("Power supervisor (Classical PI): Target " + String(target_kw, 2) + " kW | Act: " + String(new_total_kw, 2) + " kW (Main " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% + Aux " + (aux_on ? "2kW" : "0kW") + ") | Rec=" + String(rec_pwm, 0) + "% | T=" + String(temp1, 1) + "C");
+  btLog("Power supervisor (Classical PID): Target " + String(target_kw, 2) + " kW | Act: " + String(new_total_kw, 2) + " kW (Main " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% + Aux " + (aux_on ? "2kW" : "0kW") + ") | Rec=" + String(rec_pwm, 0) + "% (dRec/dt=" + String(d_rec_pwm_dt, 2) + "%/s) | T=" + String(temp1, 1) + "C");
 }
 
 void setup_tempcontrolwithspeed(void)
