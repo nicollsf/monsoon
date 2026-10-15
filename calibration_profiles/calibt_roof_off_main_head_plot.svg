@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" style="background:#0f172a; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;">
 <text x="500.0" y="32" fill="#f8fafc" font-size="20" font-weight="bold" text-anchor="middle">Thermal Step &amp; Decay Calibration: Roof OFF</text>
-<text x="500.0" y="52" fill="#94a3b8" font-size="13" text-anchor="middle">Configuration: Stall Roof OFF (Main Head) | Flow: 4.77 LPM | Identified: &tau;_dead = 22.6s, &tau; = 266.2s, UA_ss = 219.4 W/&deg;C</text>
+<text x="500.0" y="52" fill="#94a3b8" font-size="13" text-anchor="middle">Configuration: Stall Roof OFF (Main Head) | Flow: 4.77 LPM | Identified: τ_dead = 22.6s, τ = 266.2s, UA_ss = 219.4 W/°C</text>
 <rect x="80" y="70" width="840" height="470" fill="#1e293b" rx="4"/>
 <rect x="80" y="70" width="71.16949768586838" height="470" fill="#334155" opacity="0.2"/>
 <rect x="151.16949768586838" y="70" width="282.4754423042431" height="470" fill="#f97316" opacity="0.08"/>
@@ -11,21 +11,21 @@
 <text x="457.6760747165106" y="88" fill="#3b82f6" font-size="11" font-weight="600" text-anchor="middle">STABILIZE (4.8 kW)</text>
 <text x="700.8536047214549" y="88" fill="#06b6d4" font-size="11" font-weight="600" text-anchor="middle">COOLING DECAY (0 kW)</text>
 <line x1="80" y1="540.0" x2="920" y2="540.0" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="544.0" fill="#94a3b8" font-size="11" text-anchor="end">20&deg;C</text>
+<text x="72" y="544.0" fill="#94a3b8" font-size="11" text-anchor="end">20°C</text>
 <line x1="80" y1="472.85714285714283" x2="920" y2="472.85714285714283" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="476.85714285714283" fill="#94a3b8" font-size="11" text-anchor="end">25&deg;C</text>
+<text x="72" y="476.85714285714283" fill="#94a3b8" font-size="11" text-anchor="end">25°C</text>
 <line x1="80" y1="405.7142857142857" x2="920" y2="405.7142857142857" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="409.7142857142857" fill="#94a3b8" font-size="11" text-anchor="end">30&deg;C</text>
+<text x="72" y="409.7142857142857" fill="#94a3b8" font-size="11" text-anchor="end">30°C</text>
 <line x1="80" y1="338.57142857142856" x2="920" y2="338.57142857142856" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="342.57142857142856" fill="#94a3b8" font-size="11" text-anchor="end">35&deg;C</text>
+<text x="72" y="342.57142857142856" fill="#94a3b8" font-size="11" text-anchor="end">35°C</text>
 <line x1="80" y1="271.42857142857144" x2="920" y2="271.42857142857144" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="275.42857142857144" fill="#94a3b8" font-size="11" text-anchor="end">40&deg;C</text>
+<text x="72" y="275.42857142857144" fill="#94a3b8" font-size="11" text-anchor="end">40°C</text>
 <line x1="80" y1="204.28571428571428" x2="920" y2="204.28571428571428" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="208.28571428571428" fill="#94a3b8" font-size="11" text-anchor="end">45&deg;C</text>
+<text x="72" y="208.28571428571428" fill="#94a3b8" font-size="11" text-anchor="end">45°C</text>
 <line x1="80" y1="137.14285714285714" x2="920" y2="137.14285714285714" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="141.14285714285714" fill="#94a3b8" font-size="11" text-anchor="end">50&deg;C</text>
+<text x="72" y="141.14285714285714" fill="#94a3b8" font-size="11" text-anchor="end">50°C</text>
 <line x1="80" y1="70.0" x2="920" y2="70.0" stroke="#334155" stroke-dasharray="3,3"/>
-<text x="72" y="74.0" fill="#94a3b8" font-size="11" text-anchor="end">55&deg;C</text>
+<text x="72" y="74.0" fill="#94a3b8" font-size="11" text-anchor="end">55°C</text>
 <line x1="80.0" y1="70" x2="80.0" y2="540" stroke="#334155" stroke-dasharray="3,3"/>
 <text x="80.0" y="558" fill="#94a3b8" font-size="11" text-anchor="middle">0m</text>
 <line x1="175.65899844649027" y1="70" x2="175.65899844649027" y2="540" stroke="#334155" stroke-dasharray="3,3"/>
@@ -56,9 +56,9 @@
 <text x="955" y="305.0" fill="#94a3b8" font-size="12" text-anchor="middle" transform="rotate(90,955,305.0)">Flow (LPM) / Power (kW)</text>
 <rect x="95" y="500" width="620" height="30" fill="#0f172a" rx="4" opacity="0.85"/>
 <line x1="105" y1="515" x2="125" y2="515" stroke="#ef4444" stroke-width="2.5"/>
-<text x="130" y="519" fill="#f8fafc" font-size="11">Measured Temp (&deg;C)</text>
+<text x="130" y="519" fill="#f8fafc" font-size="11">Measured Temp (°C)</text>
 <line x1="265" y1="515" x2="285" y2="515" stroke="#e879f9" stroke-width="2.5" stroke-dasharray="5,3"/>
-<text x="290" y="519" fill="#e879f9" font-size="11">Fitted FOPDT Model (R&sup2;=0.995)</text>
+<text x="290" y="519" fill="#e879f9" font-size="11">Fitted FOPDT Model (R²=0.995)</text>
 <line x1="470" y1="515" x2="490" y2="515" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,2"/>
 <text x="495" y="519" fill="#fbbf24" font-size="11">Heater Power (kW)</text>
 <line x1="610" y1="515" x2="630" y2="515" stroke="#10b981" stroke-width="1.5"/>
