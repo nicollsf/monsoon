@@ -673,7 +673,7 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
         htrs_enable = 1;
-        reset_power_supervisor(4.2f); // Initialize classical PI power supervisor at 4.2 kW
+        reset_power_supervisor(5.2f); // Initialize classical PID power supervisor at 5.2 kW
         temp_controlmode = TCSPEED;
         auto_wtopupenable = 1; // Safety fallback
         auto_wtopup_timeout = 120000; // 120s safety fallback timeout (recovery pump handles closed-loop replenishment)
@@ -686,7 +686,7 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("WASH: Soft-start circulation ramping.");
         htrs_enable = 1;
-        reset_power_supervisor(4.2f);
+        reset_power_supervisor(5.2f);
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);

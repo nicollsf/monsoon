@@ -544,7 +544,7 @@ float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
 // Evaluated on a 10-second sample period to ensure frequency separation
 // from the inner 1.5s delivery flow temperature PID.
 // ----------------------------------------------------------------------
-static float power_integral_kw = 4.2f;
+static float power_integral_kw = 5.2f;
 static float last_rec_pwm = 72.0f;
 
 void reset_power_supervisor(float initial_kw) {
@@ -683,9 +683,9 @@ void setup_tempcontrolwithspeed(void)
   tc_pidoutput = 4.0;
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  // Set output limits in Litres Per Minute (LPM): 3.0 to 5.0 LPM
-  // (5.0 LPM guarantees delivery never exceeds physical drain pan recovery capacity)
-  myPID.SetOutputLimits(3.0, 5.0); 
+  // Set output limits in Litres Per Minute (LPM): 3.0 to 6.5 LPM
+  // (6.5 LPM corresponds to ~60% PWM0, driving recovery into the 70-75% sweet spot)
+  myPID.SetOutputLimits(3.0, 6.5); 
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
@@ -708,8 +708,8 @@ void loop_tempcontrolwithspeed(void)
     desired_flow = min(desired_flow, max_soft_ramp);
   }
 
-  // Constrain between safe bounds [3.0, 5.0] LPM
-  desired_flow = constrain(desired_flow, 3.0f, 5.0f);
+  // Constrain between safe bounds [3.0, 6.5] LPM
+  desired_flow = constrain(desired_flow, 3.0f, 6.5f);
 
   setpump_lpm(RPUMPD, desired_flow);
 }

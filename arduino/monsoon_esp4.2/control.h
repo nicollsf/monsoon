@@ -77,7 +77,7 @@ extern float temp_pred_45s; // 45-second forward lookahead temperature (°C)
 void loop_heaters(void);
 void loop_ssr_control(void);
 void loop_main_power_supervisor(void);
-void reset_power_supervisor(float initial_kw = 4.2f);
+void reset_power_supervisor(float initial_kw = 5.2f);
 #define loop_aux_power_supervisor loop_main_power_supervisor
 void loop_pumps_and_valves(void);
 
