@@ -27,6 +27,7 @@ static unsigned long wash_temp_count = 0;
 static float wash_temp_max = 0.0f;
 static float wash_flow_sum = 0.0f;
 static unsigned long wash_flow_count = 0;
+float wash_locked_flow = 5.0f;
 //int auto_substatechange = 0;
 
 
@@ -657,7 +658,7 @@ void loop_autowarm(void)
 }
 
 // Auto wash
-const char *autowash_statestrs[] = {"NONE", "SOFTSTART", "CYCLE", "WTF"};
+const char *autowash_statestrs[] = {"NONE", "SOFTSTART", "FLOW_CTRL", "HEATER_CTRL", "WTF"};
 void loop_autowash(void)
 {
   static int last_substate = -1;
@@ -673,7 +674,9 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("Entering WASH_NONE: Starting shower.");
         htrs_enable = 1;
-        reset_power_supervisor(5.2f); // Initialize classical PID power supervisor at 5.2 kW
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
+        ssr_main_duty = 1.0f;
         temp_controlmode = TCSPEED;
         auto_wtopupenable = 1; // Safety fallback
         auto_wtopup_timeout = 120000; // 120s safety fallback timeout (recovery pump handles closed-loop replenishment)
@@ -686,7 +689,9 @@ void loop_autowash(void)
       if( just_entered ) {
         btLog("WASH: Soft-start circulation ramping.");
         htrs_enable = 1;
-        reset_power_supervisor(5.2f);
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
+        ssr_main_duty = 1.0f;
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
@@ -694,66 +699,133 @@ void loop_autowash(void)
         temp_controlmode = TCSPEED;
       }
 
-      // Exit Criteria: Advance to WASH_CYCLE when return flow is established (>= 3.0 LPM for >= 4s) or after 15s timeout
+      // Exit Criteria: Advance to WASH_FLOW_CTRL when return flow is established (>= 3.0 LPM for >= 4s) or after 15s timeout
       if ((flow_lpm1 >= 3.0f && millis() - auto_substatestime >= 4000) || (millis() - auto_substatestime >= 15000)) {
-        btLog("WASH: Soft-start complete (flow1=" + String(flow_lpm1, 1) + " LPM). Entering steady-state WASH_CYCLE.");
-        auto_switchsubstate(WASH_CYCLE);
+        btLog("WASH: Soft-start complete (flow1=" + String(flow_lpm1, 1) + " LPM). Entering WASH_FLOW_CTRL.");
+        auto_switchsubstate(WASH_FLOW_CTRL);
       }
       break;
 
-    case WASH_CYCLE:
+    case WASH_FLOW_CTRL: {
       if( just_entered ) {
-        btLog("WASH: PID temperature control active.");
+        btLog("WASH_FLOW_CTRL: Flow-based temperature control active with full 6.0 kW heater power.");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
-        auto_scavengecontrolenable = 1; // Keep closed-loop recovery tracking active
+        setpump_en(RPUMPR, RON);
+        auto_scavengecontrolenable = 1;
+        htrs_enable = 1;
+        setrelay_en(RPHEATER, RON);
+        setrelay_en(RPHEATERA, RON);
+        ssr_main_duty = 1.0f;
+        temp_controlmode = TCSPEED;
       }
-      // Accumulate wash stats every second
-      static unsigned long last_stat_accum = 0;
-      if (millis() - last_stat_accum >= 1000) {
-        last_stat_accum = millis();
-        wash_temp_sum += temp1;
-        if (temp1 > wash_temp_max) {
-          wash_temp_max = temp1;
+
+      // Check transition to WASH_HEATER_CTRL:
+      // When recovery PWM exceeds 80% sustained for >= 2.0 seconds
+      static unsigned long rec_high_start = 0;
+      if (sc_setperc[RPUMPR] >= 80.0f) {
+        if (rec_high_start == 0) rec_high_start = millis();
+        if (millis() - rec_high_start >= 2000) {
+          rec_high_start = 0;
+          wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f);
+
+          // Compute expected steady-state feedforward heater duty for this flow rate
+          float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (wash_locked_flow / active_thermal_model.ref_flow_lpm) : 1.0f;
+          float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio);
+          float amb = (ambient_water_cold >= 10.0f && ambient_water_cold <= 30.0f) ? ambient_water_cold : 20.0f;
+          float p_expected_kw = ua_eff * (temp_setpoint - amb) / 1000.0f;
+          p_expected_kw = constrain(p_expected_kw, 2.0f, 6.0f);
+
+          float main_kw = constrain(p_expected_kw - 2.0f, 0.0f, 4.0f);
+          float initial_duty = main_kw / 4.0f;
+
+          btLog("WASH: Recovery PWM reached " + String(sc_setperc[RPUMPR], 1) + "%. Locking delivery flow to " + 
+                String(wash_locked_flow, 2) + " LPM. Transitioning to WASH_HEATER_CTRL at " + 
+                String(p_expected_kw, 2) + " kW (Main SSR " + String((int)(initial_duty * 100.0f + 0.5f)) + "% + Aux 2kW).");
+
+          setup_tempcontrolwithheater(initial_duty);
+          auto_switchsubstate(WASH_HEATER_CTRL);
+          break;
         }
-        wash_temp_count++;
-        
-        wash_flow_sum += flow_lpm0;
-        wash_flow_count++;
-      }
-
-      // PID Debug Logging
-      static unsigned long last_debug_log = 0;
-      if (millis() - last_debug_log > 10000) {
-        last_debug_log = millis();
-        Serial.printf("WASH_DBG: Setpoint=%.2f, Temp=%.2f, PID_Out(LPM)=%.2f, Pump_PWM=%.1f%%, Htr_En=%d/%d, Htr_Act=%d/%d\n",
-          temp_setpoint,
-          tc_pidinput,
-          tc_pidoutput,
-          sc_setperc[RPUMPD],
-          getrelay_en(RPHEATER),
-          getrelay_en(RPHEATERA),
-          getrelay(RPHEATER),
-          getrelay(RPHEATERA));
-      }
-
-      // Foot advance: Step on drain to stop recovery flow
-      if (millis() - auto_statestime >= 15000) {
-        // If recovery flow (sensor 1) has been low for 5 seconds
-        if (millis() - flow_lastht1 > 5000) {
-          btLog("Foot advance: No recovery flow detected, advancing to STATE_PAUSE");
-          auto_switchstate(STATE_PAUSE, "Foot advance");
-        }
-      }
-
-      // Debug foot advance - now shows both flows
-      static unsigned long last_fa_debug_wash = 0;
-      if (millis() - last_fa_debug_wash > 2000) {
-        last_fa_debug_wash = millis();
-        Serial.printf("FootAdvance DBG (WASH): state_time=%lu, flow0(del)=%.2f, flow1(rec)=%.2f, rec_age=%lu\n", 
-           millis() - auto_statestime, flow_lpm0, flow_lpm1, millis() - flow_lastht1);
+      } else {
+        rec_high_start = 0;
       }
       break;
+    }
+
+    case WASH_HEATER_CTRL: {
+      if( just_entered ) {
+        btLog("WASH_HEATER_CTRL: Heater-based temperature control active. Locked flow=" + String(wash_locked_flow, 2) + " LPM.");
+        setrelay_en(RPDELIVER, RON);
+        setpump_en(RPUMPD, RON);
+        setpump_en(RPUMPR, RON);
+        auto_scavengecontrolenable = 1;
+        setpump_lpm(RPUMPD, wash_locked_flow);
+        temp_controlmode = TCHEATER;
+      }
+
+      // Maintain locked delivery flow
+      setpump_lpm(RPUMPD, wash_locked_flow);
+
+      // Hydraulic safety guard: If recovery PWM climbs excessively high (filter restriction develops),
+      // gently trim the locked delivery flow rate
+      static unsigned long last_rec_guard = 0;
+      if (millis() - last_rec_guard >= 1000) {
+        last_rec_guard = millis();
+        if (sc_setperc[RPUMPR] >= 88.0f) {
+          wash_locked_flow = max(3.5f, wash_locked_flow - 0.05f); // Trim 0.05 LPM/s
+          btLog("WASH_HEATER_CTRL: High recovery load (" + String(sc_setperc[RPUMPR], 0) + "%). Trimming delivery flow to " + String(wash_locked_flow, 2) + " LPM.");
+        }
+      }
+      break;
+    }
+  }
+
+  // Active washing loops (shared across WASH_FLOW_CTRL and WASH_HEATER_CTRL)
+  if (auto_substate == WASH_FLOW_CTRL || auto_substate == WASH_HEATER_CTRL) {
+    // Accumulate wash stats every second
+    static unsigned long last_stat_accum = 0;
+    if (millis() - last_stat_accum >= 1000) {
+      last_stat_accum = millis();
+      wash_temp_sum += temp1;
+      if (temp1 > wash_temp_max) {
+        wash_temp_max = temp1;
+      }
+      wash_temp_count++;
+      
+      wash_flow_sum += flow_lpm0;
+      wash_flow_count++;
+    }
+
+    // PID Debug Logging every 10s
+    static unsigned long last_debug_log = 0;
+    if (millis() - last_debug_log > 10000) {
+      last_debug_log = millis();
+      if (auto_substate == WASH_FLOW_CTRL) {
+        Serial.printf("WASH_DBG (FLOW_CTRL): SP=%.2f, Temp=%.2f, FlowPID_Out=%.2f LPM, PumpD=%.1f%%, PumpR=%.1f%%, 6kW FULL\n",
+          temp_setpoint, temp1, tc_pidoutput, sc_setperc[RPUMPD], sc_setperc[RPUMPR]);
+      } else {
+        Serial.printf("WASH_DBG (HEATER_CTRL): SP=%.2f, Temp=%.2f, LockedFlow=%.2f LPM, SSR_Duty=%.1f%%, PumpR=%.1f%%\n",
+          temp_setpoint, temp1, wash_locked_flow, ssr_main_duty * 100.0f, sc_setperc[RPUMPR]);
+      }
+    }
+
+    // Foot advance: Step on drain to stop recovery flow
+    if (millis() - auto_statestime >= 15000) {
+      // If recovery flow (sensor 1) has been low for 5 seconds
+      if (millis() - flow_lastht1 > 5000) {
+        btLog("Foot advance: No recovery flow detected, advancing to STATE_PAUSE");
+        auto_switchstate(STATE_PAUSE, "Foot advance");
+      }
+    }
+
+    // Debug foot advance - shows both flows
+    static unsigned long last_fa_debug_wash = 0;
+    if (millis() - last_fa_debug_wash > 2000) {
+      last_fa_debug_wash = millis();
+      Serial.printf("FootAdvance DBG (WASH): state_time=%lu, flow0(del)=%.2f, flow1(rec)=%.2f, rec_age=%lu\n", 
+         millis() - auto_statestime, flow_lpm0, flow_lpm1, millis() - flow_lastht1);
+    }
   }
   return;
 }
@@ -1241,7 +1313,7 @@ void auto_switchsubstate(int substate)
   auto_substatestime = millis();
 
   // Don't wipe pump/relay intents when transitioning between active running substates (WASH, WARM, or CALIBT)
-  if (!(auto_state == STATE_WASH && old_substate == WASH_SOFTSTART && substate == WASH_CYCLE) &&
+  if (!(auto_state == STATE_WASH && (substate == WASH_FLOW_CTRL || substate == WASH_HEATER_CTRL)) &&
       !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD) &&
       !(auto_state == STATE_CALIBT)) {
     auto_scavenge_integral = 0.0f;
@@ -1296,6 +1368,7 @@ void auto_switchstate(int state, String reason)
     wash_temp_max = 0.0f;
     wash_flow_sum = 0.0f;
     wash_flow_count = 0;
+    wash_locked_flow = 5.0f;
   }
   if( auto_state==STATE_FILL ) {
     fill_overfill_count = 0;

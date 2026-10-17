@@ -17,9 +17,12 @@ enum autowarm_states {
 enum autowash_states {
   WASH_NONE = 0,
   WASH_SOFTSTART,
-  WASH_CYCLE
+  WASH_FLOW_CTRL,
+  WASH_HEATER_CTRL,
+  WASH_WTF
 };
 
+extern float wash_locked_flow;
 extern float temp_setpoint;
 extern float temp_reqsetpoint;
 extern auto_states auto_nextstate;

@@ -450,18 +450,99 @@ void save_temp_setpoint(void) {
 }
 
 // Cases
-void setup_tempcontrolwithheater(void);
-void loop_tempcontrolwithheater(void);
+#include <PID_v1.h>
+
 void setup_tempcontrolwithspeed(void);
 void loop_tempcontrolwithspeed(void);
 
+// ----------------------------------------------------------------------
+//   PID temperature control using delivery speed
+// ----------------------------------------------------------------------
+double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
+double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
+PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
+
+float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
+
+// ----------------------------------------------------------------------
+//   PID temperature control using heater power (Main 4kW SSR modulation)
+// ----------------------------------------------------------------------
+double htr_pidsetpoint, htr_pidinput, htr_pidoutput;
+// DIRECT mode: if temp1 < setpoint (error > 0), increase heat output (higher SSR duty)
+// htr_Kp: 0.08 duty per deg C (320 W per deg C offset)
+// htr_Ki: 0.002 duty per sec (smooth integral accumulation)
+// htr_Kd: 0.4 duty per (deg C / sec) rate of change
+double htr_Kp = 0.08, htr_Ki = 0.002, htr_Kd = 0.4;
+PID htrPID(&htr_pidinput, &htr_pidoutput, &htr_pidsetpoint, htr_Kp, htr_Ki, htr_Kd, DIRECT);
+
+void setup_tempcontrolwithheater(float initial_duty) {
+  htr_pidsetpoint = temp_setpoint;
+  if (temp1 > -500.0f) {
+    htr_pidinput = temp1;
+  } else {
+    htr_pidinput = temp_setpoint;
+  }
+  
+  initial_duty = constrain(initial_duty, 0.05f, 1.0f);
+  htr_pidoutput = (double)initial_duty;
+  ssr_main_duty = initial_duty;
+
+  htrPID.SetMode(MANUAL);
+  htrPID.SetOutputLimits(0.05, 1.0); // 5% (200W) to 100% (4000W) Main SSR duty
+  htrPID.SetSampleTime(2000);        // 2000 ms sample period (smooth, slow heater loop)
+  htrPID.SetMode(AUTOMATIC);
+
+  setrelay_en(RPHEATERA, RON); // 2kW Aux kettle element provides stable base heat
+  setrelay_en(RPHEATER, RON);  // 4kW Main geyser element relay closed, SSR actively modulates duty
+
+  temp_controlmode = TCHEATER;
+  temp_controlmodelast = TCHEATER;
+
+  btLog("TCHEATER initialized: Initial duty=" + String((int)(initial_duty * 100.0f + 0.5f)) + "% (Aux 2kW ON + Main SSR)");
+}
+
+void loop_tempcontrolwithheater(void)
+{
+  htr_pidsetpoint = temp_setpoint;
+  if (temp1 > -500.0f) {
+    htr_pidinput = temp1;
+  }
+  htrPID.Compute();
+
+  // Active heater power regulation: Aux ON (2kW) + Main SSR (0.05 - 1.0)
+  setrelay_en(RPHEATERA, RON);
+  setrelay_en(RPHEATER, RON);
+  ssr_main_duty = constrain((float)htr_pidoutput, 0.05f, 1.0f);
+
+  // Debug logging every 10 seconds
+  static unsigned long last_htr_dbg = 0;
+  if (millis() - last_htr_dbg >= 10000) {
+    last_htr_dbg = millis();
+    float total_kw = 2.0f + (4.0f * ssr_main_duty);
+    Serial.printf("HTR_PID_DBG: SP=%.2f, Temp=%.2f, SSR_Duty=%.1f%%, Total=%.2f kW, LockedFlow=%.2f LPM, RecPWM=%.1f%%\n",
+      temp_setpoint, temp1, ssr_main_duty * 100.0f, total_kw, wash_locked_flow, sc_setperc[RPUMPR]);
+  }
+}
+
 void loop_tempcontrol(void)
 {
+  // Always update 45s predictive temperature model for telemetry
+  float total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
+  float q_del = max(2.0f, flow_lpm0);
+  float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (q_del / active_thermal_model.ref_flow_lpm) : 1.0f;
+  float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio); // W/C
+  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
+  float dtemp_dt_s = (active_thermal_model.c_th_kj_per_c > 0.1f) ? ((total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c) : 0.0f; // C/s
+  temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
+
   // Initialise if mode change
   if( temp_controlmode!=temp_controlmodelast ) {
     switch( temp_controlmode ) {
       case TCSPEED:
         setup_tempcontrolwithspeed();
+        break;
+      case TCHEATER:
+        setup_tempcontrolwithheater(0.80f);
         break;
     }
     temp_controlmodelast = temp_controlmode;
@@ -472,69 +553,28 @@ void loop_tempcontrol(void)
     case TCOFF:
       setrelay_en(RPHEATER, ROFF);
       setrelay_en(RPHEATERA, ROFF);
+      ssr_main_duty = 0.0f;
       break;
     case TCON:
       setrelay_en(RPHEATER, RON);
       setrelay_en(RPHEATERA, RON);
+      ssr_main_duty = 1.0f;
       break;
     case TCHEATER:
       loop_tempcontrolwithheater();
       break;
     case TCSPEED:
       if( htrs_enable ) {
-        loop_main_power_supervisor();
-
-        // Main heater (4kW) is ON if duty > 0 (modulated by SSR slow-PWM on GPIO 33)
-        setrelay_en(RPHEATER, (ssr_main_duty > 0.01f) ? RON : ROFF);
+        // Full 6.0 kW power during flow-based control regime
+        setrelay_en(RPHEATERA, RON);
+        setrelay_en(RPHEATER, RON);
+        ssr_main_duty = 1.0f;
 
         loop_tempcontrolwithspeed();
       }
       break;
   }
 }
-
-// ----------------------------------------------------------------------
-//   Bang-bang temperature control using heaters
-// ----------------------------------------------------------------------
-
-void setup_tempcontrolwithheater(void) {
-  return;
-}
-
-void loop_tempcontrolwithheater(void)
-{
-  float target = temp_setpoint;
-  
-  // Boost the setpoint by 2 degrees during WARM states to build thermal inertia.
-  // This compensates for the temperature drop when transitioning to WASH.
-  if (auto_state == STATE_WARM || auto_state == STATE_WARM1) {
-    target += 2.0;
-  }
-
-  const float TOLERANCE = 1.0; // +/- 1 degree around target
-  
-  // Bang-bang control with hysteresis band
-  if( temp1 < target - TOLERANCE ) {
-    setrelay_en(RPHEATER, RON);
-    setrelay_en(RPHEATERA, RON);
-    ssr_main_duty = 1.0f;
-  } else if ( temp1 > target + TOLERANCE ) {
-    setrelay_en(RPHEATER, ROFF);
-    setrelay_en(RPHEATERA, ROFF);
-    ssr_main_duty = 0.0f;
-  }
-  // If inside the deadband, do nothing to prevent relay chatter.
-}
-
-// ----------------------------------------------------------------------
-//   PID temperature control using delivery speed
-// ----------------------------------------------------------------------
-#include <PID_v1.h>
-double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
-PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
-
-float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
 
 // ----------------------------------------------------------------------
 //   Classical Cascaded Hydraulic-Headroom Power Supervisor
@@ -683,9 +723,9 @@ void setup_tempcontrolwithspeed(void)
   tc_pidoutput = 4.0;
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
-  // Set output limits in Litres Per Minute (LPM): 3.0 to 6.5 LPM
-  // (6.5 LPM corresponds to ~60% PWM0, driving recovery into the 70-75% sweet spot)
-  myPID.SetOutputLimits(3.0, 6.5); 
+  // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
+  // Allows Monsoon high-flow delivery up to recovery pump capacity
+  myPID.SetOutputLimits(3.0, 8.5); 
   // Evaluate every 1500 ms
   myPID.SetSampleTime(1500);
   wash_speed_start_time = millis();
@@ -708,8 +748,8 @@ void loop_tempcontrolwithspeed(void)
     desired_flow = min(desired_flow, max_soft_ramp);
   }
 
-  // Constrain between safe bounds [3.0, 6.5] LPM
-  desired_flow = constrain(desired_flow, 3.0f, 6.5f);
+  // Constrain between safe bounds [3.0, 8.5] LPM
+  desired_flow = constrain(desired_flow, 3.0f, 8.5f);
 
   setpump_lpm(RPUMPD, desired_flow);
 }

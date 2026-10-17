@@ -93,4 +93,8 @@ extern double tc_pidinput, tc_pidoutput;
 
 void setup_tempcontrol(void);
 void loop_tempcontrol(void);
+void setup_tempcontrolwithheater(float initial_duty = 0.80f);
+void loop_tempcontrolwithheater(void);
+void setup_tempcontrolwithspeed(void);
+void loop_tempcontrolwithspeed(void);
 void save_temp_setpoint(void);
