@@ -109,18 +109,19 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Continuous low-flow circulation at $\sim 2.2\text{--}2.5\text{ LPM}$.
     * Dynamically modulates asymmetric heating stages ($0\text{ kW} / 2\text{ kW} / 4\text{ kW} / 6\text{ kW}$) using tight hysteresis around setpoint.
     * Holds water equilibrium within $\pm 0.5^\circ\text{C}$ indefinitely at $\sim 1.9\text{ kW}$ maintenance power until the user manually triggers `WASH`.
-* **`STATE_WASH` (Shower):**
+* **`STATE_WASH` (Two-Regime Decoupled Control Architecture):**
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
-  * **PID Speed Control (`TCSPEED`):** Output limits `[3.0, 8.5]` LPM with $1.5\text{s}$ fast sample time.
-  * **Hydraulic Headroom Power Supervisor (`loop_main_power_supervisor`):** Evaluated every **15 seconds** with deadband between $75\%$ and $80\%$ recovery PWM:
-    * **Decoupled Architecture:** The fast inner PID (1.5s) regulates instantaneous temperature by modulating delivery pump flow. The outer supervisor hunts for maximum drenching flow by creeping heater power up, pre-empted only by physical recovery pump limits or actual hardware temperature saturation ($T_{\text{meas}} \ge \text{setpoint} + 1.2^\circ\text{C}$).
-    * **Monsoon Flow Creep:** When recovery PWM $\le 75\%$ and $T_{\text{meas}} \le \text{setpoint} + 0.3^\circ\text{C}$, Main SSR duty creeps up by $+140\text{ W}$ ($+3.5\%$) per 15s to push delivery flow higher.
-    * **Hydraulic Limit Safeguards:**
-      * Recovery PWM $\ge 85\% \rightarrow$ Trim $200\text{ W}$ ($-5\%$ Main duty).
-      * Recovery PWM $\ge 80\% \rightarrow$ Gently trim $100\text{ W}$ ($-2.5\%$ Main duty).
-    * **Severe Overheat Safeguard:** $T_{\text{meas}} \ge \text{setpoint} + 1.2^\circ\text{C} \rightarrow$ Shed $400\text{ W}$ ($-10\%$ Main duty) or shed Aux 2kW if duty $< 10\%$.
-    * **Sweet Spot Deadband ($75\%\dots 80\%$ Recovery PWM):** Power is held steady with zero fighting and zero hunting.
-    * **Dual Ambient Tracking (90-Minute Rule):** Tracks both cold fill water temperature ($T_{\text{water}}$, updated in `FILL_FULL` if $>90$m since last shower) and idle air temperature ($T_{\text{air}}$, updated in `STATE_OFF` if $>90$m). Persisted to NVRAM Preferences (`monsoon_env`).
+  * **Regime 1 (`WASH_FLOW_CTRL` - Flow-Based Temperature Control):**
+    * Heaters locked on **FULL 6.0 kW** power (Main 4kW SSR @ 100% + Aux 2kW ON).
+    * Fast inner PID (`TCSPEED`, evaluated every 1.5s, limits `[3.0, 8.5]` LPM) hunts for maximum drenching flow ("Monsoon" experience) by modulating delivery pump flow to reject the full 6 kW heat input and clamp water at `temp_setpoint`.
+    * **Hydraulic Transition Trigger:** Evaluates recovery pump load (`sc_setperc[RPUMPR]`). When recovery PWM $\ge 75\%$ for $\ge 2.0\text{s}$ continuously (empirically confirmed knee of the recovery pump flow curve), the system measures and latches `wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f)` and executes a bumpless transition to Regime 2.
+    * *Winter Mode:* Under high environmental heat loss where recovery never reaches 75%, the system remains stably in `WASH_FLOW_CTRL` for the entire shower.
+  * **Regime 2 (`WASH_HEATER_CTRL` - Heater-Based Temperature Control):**
+    * **Delivery Flow:** Locked steady at `wash_locked_flow` LPM (`setpump_lpm(RPUMPD, wash_locked_flow)`), maintaining constant maximum flow without hydraulic fighting.
+    * **Bumpless Transfer:** On transition, pre-seeds the heater PID integral accumulator with the calibrated steady-state feedforward power $P_{\text{ff}} = UA_{\text{eff}} \times (T_{\text{setpoint}} - T_{\text{cold}}) / 1000\text{ kW}$ ($\text{initial\_duty} \approx 78\dots 85\%$).
+    * **Heater PID (`TCHEATER`):** Smooth, slow PID loop (sample time 2000ms, DIRECT mode, limits `[0.05, 1.0]`) modulating Main SSR duty cycle with Aux 2kW ON, providing seamless continuous heat from $2.0\text{ kW}$ to $6.0\text{ kW}$.
+    * **Hydraulic Safety Backstop:** If recovery load climbs to $\ge 88\%$ PWM (e.g. progressive drain filter restriction), `wash_locked_flow` is gently trimmed down by $0.05\text{ LPM/s}$ to guarantee pan safety.
+  * **Dual Ambient Tracking (90-Minute Rule):** Tracks both cold fill water temperature ($T_{\text{water}}$, updated in `FILL_FULL` if $>90$m since last shower) and idle air temperature ($T_{\text{air}}$, updated in `STATE_OFF` if $>90$m). Persisted to NVRAM Preferences (`monsoon_env`).
   * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming ($\pm 15\text{--}30\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
     * Base delta: $+0.2\text{ LPM}$.
     * While `!tank_full`: Delta gently creeps at $+0.004\text{ LPM/sec}$ (capped at $+0.30\text{ LPM}$) for smooth, surge-free pan clearance.
