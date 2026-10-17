@@ -721,9 +721,9 @@ void loop_autowash(void)
       }
 
       // Check transition to WASH_HEATER_CTRL:
-      // When recovery PWM exceeds 80% sustained for >= 2.0 seconds
+      // When recovery PWM exceeds 75% sustained for >= 2.0 seconds
       static unsigned long rec_high_start = 0;
-      if (sc_setperc[RPUMPR] >= 80.0f) {
+      if (sc_setperc[RPUMPR] >= 75.0f) {
         if (rec_high_start == 0) rec_high_start = millis();
         if (millis() - rec_high_start >= 2000) {
           rec_high_start = 0;
