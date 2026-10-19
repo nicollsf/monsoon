@@ -721,27 +721,35 @@ void loop_autowash(void)
       }
 
       // Check transition to WASH_HEATER_CTRL:
-      // When recovery PWM exceeds 75% sustained for >= 2.0 seconds
+      // Transition requires reliably observed recovery pump signal in excess of 78% AND verified heater headroom.
+      // 1. Initial settling guard: Give inner speed PID (TCSPEED) at least 30s to ramp and stabilize flow
+      bool settling_done = (millis() - auto_substatestime >= 30000);
+
+      // 2. Verified heater headroom:
+      //    - Water temperature is within 0.5C of setpoint (or above setpoint)
+      //    - Steady-state power to maintain setpoint at this flow rate is <= 5.2 kW (leaves >= 0.8 kW downward modulating headroom on 4 kW Main SSR)
+      float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (flow_lpm0 / active_thermal_model.ref_flow_lpm) : 1.0f;
+      float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio);
+      float amb = (ambient_water_cold >= 10.0f && ambient_water_cold <= 30.0f) ? ambient_water_cold : 20.0f;
+      float p_expected_kw = ua_eff * (temp_setpoint - amb) / 1000.0f;
+
+      bool heater_headroom = (temp1 > -500.0f) && (temp1 >= temp_setpoint - 0.5f) && (p_expected_kw <= 5.2f);
+
+      // 3. Reliably observed recovery pump signal in excess of 78% sustained continuously for >= 8.0 seconds
       static unsigned long rec_high_start = 0;
-      if (sc_setperc[RPUMPR] >= 75.0f) {
+      if (settling_done && (sc_setperc[RPUMPR] > 78.0f) && heater_headroom) {
         if (rec_high_start == 0) rec_high_start = millis();
-        if (millis() - rec_high_start >= 2000) {
+        if (millis() - rec_high_start >= 8000) {
           rec_high_start = 0;
           wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f);
 
-          // Compute expected steady-state feedforward heater duty for this flow rate
-          float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (wash_locked_flow / active_thermal_model.ref_flow_lpm) : 1.0f;
-          float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio);
-          float amb = (ambient_water_cold >= 10.0f && ambient_water_cold <= 30.0f) ? ambient_water_cold : 20.0f;
-          float p_expected_kw = ua_eff * (temp_setpoint - amb) / 1000.0f;
           p_expected_kw = constrain(p_expected_kw, 2.0f, 6.0f);
-
           float main_kw = constrain(p_expected_kw - 2.0f, 0.0f, 4.0f);
           float initial_duty = main_kw / 4.0f;
 
-          btLog("WASH: Recovery PWM reached " + String(sc_setperc[RPUMPR], 1) + "%. Locking delivery flow to " + 
-                String(wash_locked_flow, 2) + " LPM. Transitioning to WASH_HEATER_CTRL at " + 
-                String(p_expected_kw, 2) + " kW (Main SSR " + String((int)(initial_duty * 100.0f + 0.5f)) + "% + Aux 2kW).");
+          btLog("WASH: Reliably observed recovery load >78% (" + String(sc_setperc[RPUMPR], 1) + 
+                "%) with heater headroom (" + String(p_expected_kw, 2) + " kW). Locking delivery flow to " + 
+                String(wash_locked_flow, 2) + " LPM. Entering WASH_HEATER_CTRL.");
 
           setup_tempcontrolwithheater(initial_duty);
           auto_switchsubstate(WASH_HEATER_CTRL);

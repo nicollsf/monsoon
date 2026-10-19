@@ -449,7 +449,7 @@ float get_recovery_pwm_from_flow(float corr_lpm) {
     int last = calibf_table_size - 1;
     float corr_diff = calibf_table_corr[last] - calibf_table_corr[last - 1];
     float pwm_diff = calibf_table_pwm[last] - calibf_table_pwm[last - 1];
-    float slope_last = (corr_diff > 0.05f) ? (pwm_diff / corr_diff) : 10.0f;
+    float slope_last = (corr_diff > 0.05f) ? constrain(pwm_diff / corr_diff, 4.0f, 15.0f) : 10.0f;
     return constrain(calibf_table_pwm[last] + slope_last * (corr_lpm - calibf_table_corr[last]), 0.0f, 100.0f);
   }
 
@@ -458,8 +458,14 @@ float get_recovery_pwm_from_flow(float corr_lpm) {
     if (corr_lpm >= calibf_table_corr[i] && corr_lpm <= calibf_table_corr[i + 1]) {
       float span = calibf_table_corr[i + 1] - calibf_table_corr[i];
       if (span > 0.01f) {
+        float eff_pwm_step = calibf_table_pwm[i + 1] - calibf_table_pwm[i];
+        float seg_slope = eff_pwm_step / span;
+        if (seg_slope > 15.0f) {
+          // Cap segment slope to 15.0%/LPM to prevent artificial feedforward spikes from aerated calibration runs
+          return constrain(calibf_table_pwm[i] + 15.0f * (corr_lpm - calibf_table_corr[i]), 0.0f, 100.0f);
+        }
         float frac = (corr_lpm - calibf_table_corr[i]) / span;
-        return constrain(calibf_table_pwm[i] + frac * (calibf_table_pwm[i + 1] - calibf_table_pwm[i]), 0.0f, 100.0f);
+        return constrain(calibf_table_pwm[i] + frac * eff_pwm_step, 0.0f, 100.0f);
       }
       return calibf_table_pwm[i];
     }
@@ -567,14 +573,15 @@ void load_calibf_table(void) {
 
   // If table is still empty or invalid, seed with standard monotonic calibration curve
   if (calibf_table_size < 2) {
-    calibf_table_size = 5;
-    calibf_table_raw[0] = 3.24f; calibf_table_corr[0] = 2.82f;
-    calibf_table_raw[1] = 4.62f; calibf_table_corr[1] = 3.60f;
-    calibf_table_raw[2] = 5.87f; calibf_table_corr[2] = 4.42f;
-    calibf_table_raw[3] = 6.51f; calibf_table_corr[3] = 4.83f;
-    calibf_table_raw[4] = 6.65f; calibf_table_corr[4] = 5.14f;
+    calibf_table_size = 6;
+    calibf_table_raw[0] = 3.24f; calibf_table_corr[0] = 2.82f; // 30% PWM
+    calibf_table_raw[1] = 4.62f; calibf_table_corr[1] = 3.60f; // 40% PWM
+    calibf_table_raw[2] = 5.87f; calibf_table_corr[2] = 4.42f; // 52% PWM
+    calibf_table_raw[3] = 7.20f; calibf_table_corr[3] = 5.40f; // 65% PWM
+    calibf_table_raw[4] = 8.50f; calibf_table_corr[4] = 6.40f; // 80% PWM
+    calibf_table_raw[5] = 9.80f; calibf_table_corr[5] = 7.40f; // 95% PWM
     flow_rec_scale = 0.767f;
-    Serial.println("Sensors: Initialized default monotonic 5-point calibration table.");
+    Serial.println("Sensors: Initialized default monotonic 6-point calibration table.");
   }
 }
 
