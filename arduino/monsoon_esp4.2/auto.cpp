@@ -727,13 +727,13 @@ void loop_autowash(void)
 
       // 2. Verified heater headroom:
       //    - Water temperature is within 0.5C of setpoint (or above setpoint)
-      //    - Steady-state power to maintain setpoint at this flow rate is <= 5.2 kW (leaves >= 0.8 kW downward modulating headroom on 4 kW Main SSR)
+      //    - Steady-state power to maintain setpoint at this flow rate is <= 5.5 kW (leaves >= 0.5 kW downward modulating headroom on 4 kW Main SSR)
       float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (flow_lpm0 / active_thermal_model.ref_flow_lpm) : 1.0f;
       float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio);
       float amb = (ambient_water_cold >= 10.0f && ambient_water_cold <= 30.0f) ? ambient_water_cold : 20.0f;
       float p_expected_kw = ua_eff * (temp_setpoint - amb) / 1000.0f;
 
-      bool heater_headroom = (temp1 > -500.0f) && (temp1 >= temp_setpoint - 0.5f) && (p_expected_kw <= 5.2f);
+      bool heater_headroom = (temp1 > -500.0f) && (temp1 >= temp_setpoint - 0.5f) && (p_expected_kw <= 5.5f);
 
       // 3. Reliably observed recovery pump signal in excess of 78% sustained continuously for >= 8.0 seconds
       static unsigned long rec_high_start = 0;
