@@ -113,7 +113,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **Regime 1 (`WASH_FLOW_CTRL` - Flow-Based Temperature Control):**
     * Heaters locked on **FULL 6.0 kW** power (Main 4kW SSR @ 100% + Aux 2kW ON).
-    * Fast inner PID (`TCSPEED`, evaluated every 1.5s, limits `[3.0, 8.5]` LPM) hunts for maximum drenching flow ("Monsoon" experience) by modulating delivery pump flow to reject the full 6 kW heat input and clamp water at `temp_setpoint`.
+    * Damped inner PID (`TCSPEED`, evaluated every 2.5s, limits `[3.0, 8.5]` LPM with $0.12\text{ LPM/s}$ slew rate limiting) hunts for maximum drenching flow ("Monsoon" experience) by modulating delivery pump flow to reject the full 6 kW heat input and clamp water at `temp_setpoint`.
     * **Hydraulic Transition Trigger:** Evaluates recovery pump load (`sc_setperc[RPUMPR]`) and heater headroom. When recovery PWM $> 78\%$ continuously for $\ge 8.0\text{s}$ after $\ge 30\text{s}$ settling in `WASH_FLOW_CTRL`, AND there is verified heater headroom ($T \ge T_{\text{setpoint}} - 0.5^\circ\text{C}$ and $P_{\text{expected}} \le 5.5\text{ kW}$), the system measures and latches `wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f)` and executes a bumpless transition to Regime 2.
     * *Winter Mode:* Under high environmental heat loss where recovery never reaches 78% or heater headroom is absent, the system remains stably in `WASH_FLOW_CTRL` for the entire shower.
   * **Regime 2 (`WASH_HEATER_CTRL` - Heater-Based Temperature Control):**

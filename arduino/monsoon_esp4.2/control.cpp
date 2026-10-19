@@ -459,7 +459,9 @@ void loop_tempcontrolwithspeed(void);
 //   PID temperature control using delivery speed
 // ----------------------------------------------------------------------
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-double tc_Kp = 0.8, tc_Ki = 0.005, tc_Kd = 0.2;
+// Damped tuning for 20s transport-delay recirculating loop:
+// Kp=0.35 (gentle proportional action), Ki=0.003 (slow anti-windup integration), Kd=0.4 (rate damping)
+double tc_Kp = 0.35, tc_Ki = 0.003, tc_Kd = 0.4;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
@@ -715,6 +717,9 @@ void loop_main_power_supervisor(void)
   btLog("Power supervisor (Classical PID): Target " + String(target_kw, 2) + " kW | Act: " + String(new_total_kw, 2) + " kW (Main " + String((int)(ssr_main_duty * 100.0f + 0.5f)) + "% + Aux " + (aux_on ? "2kW" : "0kW") + ") | Rec=" + String(rec_pwm, 0) + "% (dRec/dt=" + String(d_rec_pwm_dt, 2) + "%/s) | T=" + String(temp1, 1) + "C");
 }
 
+static float last_applied_del_flow = 3.5f;
+static unsigned long last_del_slew_time = 0;
+
 void setup_tempcontrolwithspeed(void)
 {
   // Set the target temperature for the PID controller.
@@ -726,9 +731,11 @@ void setup_tempcontrolwithspeed(void)
   // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
   // Allows Monsoon high-flow delivery up to recovery pump capacity
   myPID.SetOutputLimits(3.0, 8.5); 
-  // Evaluate every 1500 ms
-  myPID.SetSampleTime(1500);
+  // Evaluate every 2500 ms (damped to align with ~20s recirculating loop transport delay)
+  myPID.SetSampleTime(2500);
   wash_speed_start_time = millis();
+  last_del_slew_time = 0;
+  last_applied_del_flow = 3.5f;
 }
 
 void loop_tempcontrolwithspeed(void)
@@ -750,6 +757,21 @@ void loop_tempcontrolwithspeed(void)
 
   // Constrain between safe bounds [3.0, 8.5] LPM
   desired_flow = constrain(desired_flow, 3.0f, 8.5f);
+
+  // Slew rate limiter: Maximum change of +/- 0.12 LPM per second to eliminate hunting/oscillations
+  if (last_del_slew_time == 0 || now - last_del_slew_time > 3000) {
+    last_applied_del_flow = desired_flow;
+  } else {
+    float dt_s = (now - last_del_slew_time) / 1000.0f;
+    float max_step = max(0.02f, 0.12f * dt_s);
+    if (desired_flow > last_applied_del_flow + max_step) {
+      desired_flow = last_applied_del_flow + max_step;
+    } else if (desired_flow < last_applied_del_flow - max_step) {
+      desired_flow = last_applied_del_flow - max_step;
+    }
+    last_applied_del_flow = desired_flow;
+  }
+  last_del_slew_time = now;
 
   setpump_lpm(RPUMPD, desired_flow);
 }
