@@ -431,6 +431,8 @@ float get_raw_recovery_flow(float corr_lpm) {
   return flow_rec_scale > 0.01f ? (corr_lpm / flow_rec_scale) : (corr_lpm / 0.7477f);
 }
 
+// Retired: Recovery control uses direct float-centric PWM balancing.
+// Kept for diagnostic/calibration logging only.
 float get_recovery_pwm_from_flow(float corr_lpm) {
   if (corr_lpm <= 0.05f) return 0.0f;
   if (calibf_table_size < 2) {

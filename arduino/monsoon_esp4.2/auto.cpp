@@ -225,19 +225,20 @@ void loop_autowbleed(void)
 }
 
 
-// Auto scavenge control with dynamic delta ramping in calibrated delivery flow units
+// Auto scavenge control: Float-Centric PWM Balancing
+// Maintains standing pan water buffer without sucking air or overflowing the tank.
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
-float auto_scavenge_integral = 0.0f;
-float scavenge_delta_lpm = 0.5f;
-float auto_scavenge_target_lpm = 0.0f;
+float scavenge_pwm_trim = 0.0f; // Adaptive float-centering balance trim in PWM %
+float scavenge_delta_lpm = 0.0f; // Estimated flow delta for telemetry
+float auto_scavenge_target_lpm = 0.0f; // Estimated target flow for telemetry
 unsigned long scavenge_tank_full_last_time = 0;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
-    auto_scavenge_integral = 0.0f;
-    scavenge_delta_lpm = 0.5f;
+    scavenge_pwm_trim = 0.0f;
+    scavenge_delta_lpm = 0.0f;
     auto_scavenge_target_lpm = 0.0f;
     return;
   }
@@ -248,63 +249,41 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // TCP AIMD Scavenge Level Probing with Smooth Back-Off:
-  // 1. Congestion Signal (Top float switch triggered -> tank is 100% full):
-  //    - Softly step delta to negative (-0.15 LPM) to halt accumulation.
-  //    - If tank_full persists, gently decrease delta down to -0.40 LPM.
-  //    - Reset positive integral windup immediately.
-  // 2. Post-Full Headroom Recovery:
-  //    - When tank_full clears, initialize delta at -0.08 LPM.
-  // 3. Additive Increase:
-  //    - Gently ramp delta up (+0.002 LPM per 500ms, capped at +0.30 LPM) for smooth pan tracking without PWM surging.
+  // 1. Proportional Delivery Speed Tracking (Feedforward Base):
+  // When delivery pump is running, establish immediate proportional baseline
+  // (clean filter ratio ~1.35x: 25%->34%, 40%->54%, 57%->77%).
+  float del_pwm = sc_setperc[RPUMPD];
+  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.35f) : 20.0f;
+
+  // 2. Float-Centric Balance Trimming around top float switch (tank_full):
+  // - tank_full == true (Tank at upper float, pan buffer safe):
+  //   Recovery rate exceeds delivery rate. Step down -2.0% immediately, then gently
+  //   decrement (-0.05% per 500ms = -0.10%/s) to settle level ~15mm below the float.
+  // - tank_full == false (Water has transferred to pan buffer):
+  //   Reset deep negative steps to -1.0%, then gently creep upward (+0.025% per 500ms = +0.05%/s)
+  //   until water returns to tank. Authority extends to +25% to naturally overcome dirty filters!
   if (tank_full) {
     scavenge_tank_full_last_time = now;
-    if (scavenge_delta_lpm > -0.15f) {
-      scavenge_delta_lpm = -0.15f; // Soft step back-off
+    if (scavenge_pwm_trim > -2.0f) {
+      scavenge_pwm_trim = -2.0f; // Initial soft back-off step
     } else {
-      scavenge_delta_lpm = max(-0.40f, scavenge_delta_lpm - 0.005f);
+      scavenge_pwm_trim = max(-8.0f, scavenge_pwm_trim - 0.05f); // Continuous slow decrement
     }
-    if (auto_scavenge_integral > 0.0f) auto_scavenge_integral = 0.0f;
-  } else if (flow_lpm0 >= 1.0f) {
-    if (scavenge_delta_lpm < -0.08f) {
-      scavenge_delta_lpm = -0.08f;
+  } else if (del_pwm >= 15.0f) {
+    if (scavenge_pwm_trim < -1.0f) {
+      scavenge_pwm_trim = -1.0f;
     }
-    scavenge_delta_lpm = min(0.30f, scavenge_delta_lpm + 0.002f); // Additive Increase
+    scavenge_pwm_trim = min(25.0f, scavenge_pwm_trim + 0.025f); // Gentle additive increase (+3%/min)
   } else {
-    scavenge_delta_lpm = 0.2f;
-    auto_scavenge_integral = 0.0f;
+    scavenge_pwm_trim = 0.0f;
   }
 
-  // Desired recovery flow in standardized TRUE delivery units (LPM)
-  float target_rec_lpm = max(1.2f, flow_lpm0 + scavenge_delta_lpm);
-  auto_scavenge_target_lpm = target_rec_lpm;
+  // Raw combined PWM target
+  float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, 100.0f);
 
-  // 1. Feedforward baseline: Direct calibrated recovery PWM lookup from true delivery-unit target flow
-  float ff_pwm = get_recovery_pwm_from_flow(target_rec_lpm);
-
-  // 2. Closed-Loop Feedback Trimming in standardized Delivery Flow Units:
-  // Only integrate when delivery flow is established (> 1.5 LPM) and state has run > 5s
-  if (flow_lpm0 >= 1.5f && (now - auto_statestime > 5000)) {
-    // Actual recovery flow in delivery units (flow_lpm1_est)
-    float actual_rec_lpm = (flow_lpm1_est > 0.01f) ? flow_lpm1_est : (flow_lpm1 * flow_rec_scale);
-    float err = target_rec_lpm - actual_rec_lpm; // positive if actual recovery is slower than target
-    // Step integral by 0.30% PWM per LPM error per 500ms cycle
-    float delta_i = err * 0.30f;
-    
-    // Anti-windup: Only integrate positive error if recovery flow has NOT yet reached delivery flow (flow_lpm0).
-    // If actual recovery is already matching or exceeding delivery flow, the pan is clear and additional delta
-    // is handled purely by feedforward (ff_pwm) without winding up the integral term.
-    if (delta_i > 0.0f && actual_rec_lpm >= flow_lpm0) {
-      delta_i = 0.0f;
-    }
-
-    // Anti-windup bounded trim between -6% and +8% PWM (prevents deep speed collapses)
-    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -6.0f, 8.0f);
-  } else {
-    auto_scavenge_integral = 0.0f;
-  }
-
-  float raw_target_pwm = constrain(ff_pwm + auto_scavenge_integral, 0.0f, 100.0f);
+  // Telemetry indicators
+  scavenge_delta_lpm = scavenge_pwm_trim / 14.0f;
+  auto_scavenge_target_lpm = max(1.2f, flow_lpm0 + scavenge_delta_lpm);
   
   // 1. Exponential Moving Average (EMA) Low-Pass Smoothing:
   // Dampen high-frequency noise from turbulent flow pulses in the scavenge pan.
@@ -1348,7 +1327,7 @@ void auto_switchsubstate(int substate)
   if (!(auto_state == STATE_WASH && (substate == WASH_FLOW_CTRL || substate == WASH_HEATER_CTRL)) &&
       !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD) &&
       !(auto_state == STATE_CALIBT)) {
-    auto_scavenge_integral = 0.0f;
+    scavenge_pwm_trim = 0.0f;
     rpinsen_reset();
     pumpsen_reset();
   }
@@ -1469,7 +1448,7 @@ void auto_switchstate(int state, String reason)
 
   // Disable auto circuits
   auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
-  auto_scavenge_integral = 0.0f;
+  scavenge_pwm_trim = 0.0f;
   auto_wtopup_timeout = 10000;  // Reset topup timeout to default
   auto_wtopup_interval = 10000; // Reset topup repeat guard to default
 }

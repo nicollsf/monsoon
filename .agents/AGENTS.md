@@ -124,10 +124,11 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * **Thermal Saturation Fallback Guard:** If heaters are saturated at 100% (6.0 kW: Main SSR $\ge 98\%$ + Aux ON) and temperature remains below setpoint ($T < T_{\text{setpoint}} - 0.3^\circ\text{C}$) continuously for $\ge 30\text{s}$, the system executes a bumpless fallback to `WASH_FLOW_CTRL` (with 60s re-transition cooldown) so `TCSPEED` can gently trim flow to restore setpoint temperature.
     * **Hydraulic Safety Backstop:** If recovery load climbs to $\ge 88\%$ PWM (e.g. progressive drain filter restriction), `wash_locked_flow` is gently trimmed down by $0.05\text{ LPM/s}$ to guarantee pan safety.
   * **Dual Ambient Tracking (90-Minute Rule):** Tracks both cold fill water temperature ($T_{\text{water}}$, updated in `FILL_FULL` if $>90$m since last shower) and idle air temperature ($T_{\text{air}}$, updated in `STATE_OFF` if $>90$m). Persisted to NVRAM Preferences (`monsoon_env`).
-  * **Dynamic Closed-Loop Scavenge Tracking:** In `loop_autoscavengecontrol()`, the recovery pump uses feedforward + bounded PI closed-loop trimming (bounded between $-6\%$ and $+8\%$ PWM with anti-windup) to actively track $\text{flow\_lpm0} + \text{scavenge\_delta\_lpm}$ in calibrated delivery flow units (`flow_lpm1_est`).
-    * Base delta: $+0.2\text{ LPM}$.
-    * While `!tank_full`: Delta gently creeps at $+0.004\text{ LPM/sec}$ (capped at $+0.30\text{ LPM}$) for smooth, surge-free pan clearance.
-    * When `tank_full`: Delta steps to $-0.15\text{ LPM}$ to smoothly settle $\sim 15\text{mm}$ below the top float switch without pump surging.
+  * **Float-Centric Scavenge Balancing:** In `loop_autoscavengecontrol()`, the recovery pump uses direct PWM balance control without `get_recovery_pwm_from_flow()` or flow-meter integration:
+    * Proportional delivery tracking base: $\text{PWM}_{\text{base}} = 1.35 \times \text{PWM}_{\text{del}}$.
+    * While `tank_full == false`: Adaptive trim creeps upward at $+0.05\%\text{ PWM/sec}$ ($+3\%\text{/min}$, authority up to $+25\%$) to maintain pan buffer and naturally overcome progressive filter clogging.
+    * When `tank_full == true`: Steps down $-2.0\%$ immediately, then decrements at $-0.10\%\text{ PWM/sec}$ (clamped to $-8\%$) to settle level $\sim 15\text{mm}$ below the top float switch without surging or overflowing.
+    * 1.5s EMA smoothing + rate limiting ($+5\%/\text{s}$ rise, $-8\%/\text{s}$ drop) for quiet, stable operation.
     * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
 * **Flow & Temperature Sensor Filtering:**
   * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.
