@@ -229,13 +229,15 @@ void loop_autowbleed(void)
 // Maintains standing pan water buffer without sucking air or overflowing the tank.
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
-float scavenge_pwm_trim = 0.0f; // Adaptive float-centering balance trim in PWM %
+float scavenge_pwm_trim = 0.0f; // Adaptive float-seeking offset from base_pwm in PWM %
+bool scavenge_last_tank_full = false;
 unsigned long scavenge_tank_full_last_time = 0;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     scavenge_pwm_trim = 0.0f;
+    scavenge_last_tank_full = tank_full;
     return;
   }
   if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
@@ -245,37 +247,34 @@ void loop_autoscavengecontrol(void)
 
   unsigned long now = millis();
 
-  // 1. Proportional Delivery Speed Tracking (Feedforward Base):
-  // When delivery pump is running, establish immediate proportional baseline
-  // (clean filter ratio ~1.35x: 25%->34%, 40%->54%, 57%->77%).
+  // 1. Proportional Delivery Speed Tracking (Feedforward Base / Initialisation):
   float del_pwm = sc_setperc[RPUMPD];
   float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.35f) : 20.0f;
 
-  // 2. Float-Centric Balance Trimming around top float switch (tank_full):
-  // - tank_full == true (Tank at upper float, pan buffer safe):
-  //   Recovery rate exceeds delivery rate. Step down -2.0% immediately, then gently
-  //   decrement (-0.05% per 500ms = -0.10%/s) to settle level ~15mm below the float.
-  // - tank_full == false (Water has transferred to pan buffer):
-  //   Reset deep negative steps to -1.0%, then gently creep upward (+0.025% per 500ms = +0.05%/s)
-  //   until water returns to tank. Authority extends to +25% to naturally overcome dirty filters!
+  // 2. Pure Unclamped Seeking Controller around top float switch (tank_full):
+  // - tank_full == true: ALWAYS decrease recovery PWM (-2.0% on rising edge, then -0.05% per 500ms = -0.10%/s).
+  // - tank_full == false: ALWAYS increase recovery PWM (+1.0% on falling edge, then +0.025% per 500ms = +0.05%/s).
   if (tank_full) {
     scavenge_tank_full_last_time = now;
-    if (scavenge_pwm_trim > -2.0f) {
-      scavenge_pwm_trim = -2.0f; // Initial soft back-off step
+    if (!scavenge_last_tank_full) {
+      scavenge_pwm_trim -= 2.0f; // Immediate step down when top float triggers
     } else {
-      scavenge_pwm_trim = max(-8.0f, scavenge_pwm_trim - 0.05f); // Continuous slow decrement
+      scavenge_pwm_trim -= 0.05f; // Continuous slow decrement (-0.10%/s) with no artificial floor
     }
   } else if (del_pwm >= 15.0f) {
-    if (scavenge_pwm_trim < -1.0f) {
-      scavenge_pwm_trim = -1.0f;
+    if (scavenge_last_tank_full) {
+      scavenge_pwm_trim += 1.0f; // Immediate step up when top float clears
+    } else {
+      scavenge_pwm_trim += 0.025f; // Continuous slow increment (+0.05%/s) with no artificial ceiling
     }
-    scavenge_pwm_trim = min(25.0f, scavenge_pwm_trim + 0.025f); // Gentle additive increase (+3%/min)
   } else {
     scavenge_pwm_trim = 0.0f;
   }
+  scavenge_last_tank_full = tank_full;
 
-  // Raw combined PWM target
+  // Combine base + seeking trim, clamped only to physical [0%, 100%] PWM range (with anti-windup)
   float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, 100.0f);
+  scavenge_pwm_trim = raw_target_pwm - base_pwm;
 
   // Direct, lag-free hardware command: Recovery tracks delivery in exact lockstep without phase delay
   setpump_perc(RPUMPR, raw_target_pwm);
