@@ -475,8 +475,6 @@ double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
 double tc_Kp = 0.35, tc_Ki = 0.003, tc_Kd = 0.4;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
-float temp_pred_45s = 48.0f; // Global 45-second forward lookahead temperature
-
 // ----------------------------------------------------------------------
 //   PID temperature control using heater power (Main 4kW SSR modulation)
 // ----------------------------------------------------------------------
@@ -539,15 +537,6 @@ void loop_tempcontrolwithheater(void)
 
 void loop_tempcontrol(void)
 {
-  // Always update 45s predictive temperature model for telemetry
-  float total_kw = (4.0f * ssr_main_duty) + ((getrelay_en(RPHEATERA) == RON) ? 2.0f : 0.0f);
-  float q_del = max(2.0f, flow_lpm0);
-  float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (q_del / active_thermal_model.ref_flow_lpm) : 1.0f;
-  float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio); // W/C
-  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
-  float dtemp_dt_s = (active_thermal_model.c_th_kj_per_c > 0.1f) ? ((total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c) : 0.0f; // C/s
-  temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
-
   // Initialise if mode change
   if( temp_controlmode!=temp_controlmodelast ) {
     switch( temp_controlmode ) {
@@ -624,15 +613,6 @@ void loop_main_power_supervisor(void)
 
   bool aux_on = (getrelay_en(RPHEATERA) == RON);
   float total_kw = (4.0f * ssr_main_duty) + (aux_on ? 2.0f : 0.0f);
-
-  // Active thermal model telemetry calculation
-  float q_del = max(2.0f, flow_lpm0);
-  float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (q_del / active_thermal_model.ref_flow_lpm) : 1.0f;
-  float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio); // W/C
-  float p_loss_kw = ua_eff * (temp1 - ambient_water_cold) / 1000.0f; // kW
-  float dtemp_dt_s = (active_thermal_model.c_th_kj_per_c > 0.1f) ? ((total_kw - p_loss_kw) / active_thermal_model.c_th_kj_per_c) : 0.0f; // C/s
-
-  temp_pred_45s = temp1 + (dtemp_dt_s * 45.0f);
 
   // Softstart: Hold starting power steady (4.2 kW) during initial flow ramp
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);

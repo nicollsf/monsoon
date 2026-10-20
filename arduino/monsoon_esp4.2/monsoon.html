@@ -403,17 +403,6 @@
             fill: true
           },
           {
-            label: 'Pred (+45s)',
-            yAxisID: 'y',
-            data: [],
-            borderColor: '#c084fc', // purple-400
-            backgroundColor: 'rgba(192, 132, 252, 0.05)',
-            borderWidth: 2,
-            borderDash: [4, 4],
-            pointRadius: 0,
-            fill: false
-          },
-          {
             label: 'Power (kW)',
             yAxisID: 'y1',
             data: [],
@@ -484,15 +473,6 @@
             data: [],
             borderColor: '#f97316',
             borderWidth: 2.5,
-            pointRadius: 0,
-            fill: false
-          },
-          {
-            label: 'Rec (Target)',
-            data: [],
-            borderColor: '#c084fc',
-            borderWidth: 1.5,
-            borderDash: [4, 4],
             pointRadius: 0,
             fill: false
           }
@@ -738,32 +718,31 @@
       const data = content.slice(1);
 
       switch (type) {
-        case 'M': // Temperature & Power rolling data (*M37.5,45.0,4.0,100*)
+        case 'M': // Temperature & Power rolling data (*M37.5,45.0,4.0,100* or legacy *M37.5,45.0,38.2,4.0,100*)
           const mParts = data.split(',');
           const temp = parseFloat(mParts[0]);
           let totalKw = NaN;
-          let tempPred = NaN;
-          if (mParts.length >= 3) {
-            tempPred = parseFloat(mParts[2]);
-          }
-          if (mParts.length >= 4) {
+          let mainPct = NaN;
+          if (mParts.length === 4) {
+            // New 4-part: temp, bte_htr_level, totalKw, mainPct
+            totalKw = parseFloat(mParts[2]);
+            mainPct = parseInt(mParts[3]);
+          } else if (mParts.length >= 5) {
+            // Legacy 5-part: temp, bte_htr_level, temp_pred_45s, totalKw, mainPct
             totalKw = parseFloat(mParts[3]);
+            mainPct = parseInt(mParts[4]);
           }
           if (!isNaN(temp)) {
             document.getElementById('temp-val').innerText = temp.toFixed(1);
             addChartData(tempChart, '', 0, temp);
-            addChartData(tempChart, '', 1, (!isNaN(tempPred) ? tempPred : temp));
             if (!isNaN(totalKw)) {
-              addChartData(tempChart, '', 2, totalKw);
+              addChartData(tempChart, '', 1, totalKw);
               const kwEl = document.getElementById('htr-total-kw-val');
               if (kwEl) kwEl.innerText = totalKw.toFixed(1);
             }
           }
-          if (mParts.length >= 5) {
-            const mainPct = parseInt(mParts[4]);
-            if (!isNaN(mainPct)) {
-              updateAuxDutyUI(mainPct);
-            }
+          if (!isNaN(mainPct)) {
+            updateAuxDutyUI(mainPct);
           }
           break;
 
@@ -790,13 +769,12 @@
           }
           break;
 
-        case 'N': // Flow rates: flow0,flow1_raw,flow1_est,flow1_target
+        case 'N': // Flow rates: flow0,flow1_raw,flow1_est
           const flows = data.split(',');
           if (flows.length >= 2) {
             const flow0 = parseFloat(flows[0]);
             const flow1_raw = parseFloat(flows[1]);
             const flow1_est = (flows.length >= 3) ? parseFloat(flows[2]) : flow1_raw;
-            const flow1_target = (flows.length >= 4) ? parseFloat(flows[3]) : 0.0;
             if (!isNaN(flow0) && !isNaN(flow1_raw)) {
               document.getElementById('flow0-val').innerText = flow0.toFixed(1);
               document.getElementById('flow1-val').innerText = (!isNaN(flow1_est) ? flow1_est : flow1_raw).toFixed(1);
@@ -807,7 +785,6 @@
               addChartData(flowChart, label, 0, flow0);
               addChartData(flowChart, label, 1, flow1_raw);
               addChartData(flowChart, label, 2, (!isNaN(flow1_est) ? flow1_est : flow1_raw));
-              addChartData(flowChart, label, 3, (!isNaN(flow1_target) ? flow1_target : 0.0));
             }
           }
           break;

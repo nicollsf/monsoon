@@ -230,16 +230,12 @@ void loop_autowbleed(void)
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
 float scavenge_pwm_trim = 0.0f; // Adaptive float-centering balance trim in PWM %
-float scavenge_delta_lpm = 0.0f; // Estimated flow delta for telemetry
-float auto_scavenge_target_lpm = 0.0f; // Estimated target flow for telemetry
 unsigned long scavenge_tank_full_last_time = 0;
 
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     scavenge_pwm_trim = 0.0f;
-    scavenge_delta_lpm = 0.0f;
-    auto_scavenge_target_lpm = 0.0f;
     return;
   }
   if( millis()-auto_scavengecontrolstime < 500 ) return; // limit update rate to 500ms
@@ -281,10 +277,6 @@ void loop_autoscavengecontrol(void)
   // Raw combined PWM target
   float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, 100.0f);
 
-  // Telemetry indicators
-  scavenge_delta_lpm = scavenge_pwm_trim / 14.0f;
-  auto_scavenge_target_lpm = max(1.2f, flow_lpm0 + scavenge_delta_lpm);
-  
   // Direct, lag-free hardware command: Recovery tracks delivery in exact lockstep without phase delay
   setpump_perc(RPUMPR, raw_target_pwm);
 }

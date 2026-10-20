@@ -39,7 +39,6 @@ extern unsigned long auto_wtopup_timeout;
 extern unsigned long auto_wtopup_interval;
 extern int auto_woverflowstopenable;
 extern int auto_scavengecontrolenable;
-extern float auto_scavenge_target_lpm;
 //extern int auto_wheaterenable, auto_rheaterenable;
 //void loop_autortopup(void);
 //void loop_autowtopup(void);

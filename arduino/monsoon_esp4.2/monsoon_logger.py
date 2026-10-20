@@ -41,7 +41,6 @@ telemetry_data = {
     "flow0": "0.0",
     "flow1": "0.0",
     "flow1_est": "0.0",
-    "flow1_target": "0.0",
     "pressure": "0",
     "pwm0": "0",
     "pwm1": "0",
@@ -105,15 +104,18 @@ def parse_telemetry(payload):
         tag = token[0]
         val = token[1:]
         
-        if tag == 'M': # Temperature (*M37.5,45.0,38.2,4.0,100*)
+        if tag == 'M': # Temperature (*M37.5,45.0,4.0,100* or legacy *M37.5,45.0,38.2,4.0,100*)
             m_parts = val.split(',')
             if len(m_parts) >= 1:
                 telemetry_data["temp"] = m_parts[0].strip()
-            if len(m_parts) >= 3:
-                telemetry_data["temp_pred_45s"] = m_parts[2].strip()
-            if len(m_parts) >= 4:
+            if len(m_parts) == 4:
+                # New 4-part format: temp, bte_htr_level, total_kw, main_duty
+                telemetry_data["htr_total_kw"] = m_parts[2].strip()
+                telemetry_data["main_duty"] = m_parts[3].strip()
+                telemetry_data["aux_duty"] = m_parts[3].strip()
+            elif len(m_parts) >= 5:
+                # Legacy 5-part format: temp, bte_htr_level, temp_pred_45s, total_kw, main_duty
                 telemetry_data["htr_total_kw"] = m_parts[3].strip()
-            if len(m_parts) >= 5:
                 telemetry_data["main_duty"] = m_parts[4].strip()
                 telemetry_data["aux_duty"] = m_parts[4].strip()
             updated = True
@@ -131,7 +133,7 @@ def parse_telemetry(payload):
             if len(amb_parts) >= 2 and amb_parts[1].strip():
                 telemetry_data["amb_air"] = amb_parts[1].strip()
             updated = True
-        elif tag == 'N': # Flow rates (*N4.2,5.8,4.3,4.5*)
+        elif tag == 'N': # Flow rates (*N6.20,6.10,6.15*)
             flows = val.split(',')
             if len(flows) >= 1:
                 telemetry_data["flow0"] = flows[0].strip()
@@ -140,11 +142,7 @@ def parse_telemetry(payload):
             if len(flows) >= 3:
                 telemetry_data["flow1_est"] = flows[2].strip()
             else:
-                telemetry_data["flow1_est"] = telemetry_data["flow1"]
-            if len(flows) >= 4:
-                telemetry_data["flow1_target"] = flows[3].strip()
-            else:
-                telemetry_data["flow1_target"] = "0.0"
+                telemetry_data["flow1_est"] = telemetry_data.get("flow1", "0.0")
             updated = True
         elif tag == 'F': # Delivery pump speed % (*F85*)
             telemetry_data["pwm0"] = val.strip()
@@ -251,8 +249,8 @@ def on_message(client, userdata, msg):
                     # Write CSV Headers
                     csv_writer.writerow([
                         "Elapsed_ms", "State", "Substate", 
-                        "Temp", "Temp_Pred", "Setpoint", 
-                        "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est", "Flow1_Rec_Target",
+                        "Temp", "Setpoint", 
+                        "Flow0_Del", "Flow1_Rec", "Flow1_Rec_Est", 
                         "PWM0", "PWM1", 
                         "Filter_Yield", "Pressure", 
                         "Tank_Empty", "Tank_Full", 
@@ -289,12 +287,10 @@ def on_message(client, userdata, msg):
                         telemetry_data["state"],
                         telemetry_data["substate"],
                         telemetry_data["temp"],
-                        telemetry_data.get("temp_pred_45s", telemetry_data["temp"]),
                         telemetry_data["setpoint"],
                         telemetry_data["flow0"],
                         telemetry_data["flow1"],
                         telemetry_data.get("flow1_est", telemetry_data["flow1"]),
-                        telemetry_data.get("flow1_target", "0.0"),
                         telemetry_data["pwm0"],
                         telemetry_data["pwm1"],
                         filter_yield,

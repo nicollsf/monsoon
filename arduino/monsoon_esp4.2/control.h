@@ -74,7 +74,6 @@ extern bool pump_safety_veto;
 extern bool inlet_safety_veto;
 extern float ssr_main_duty; // Main 4kW SSR duty cycle: 0.0f (0%) to 1.0f (100%)
 #define ssr_aux_duty ssr_main_duty // Backward compatibility alias
-extern float temp_pred_45s; // 45-second forward lookahead temperature (°C)
 void loop_heaters(void);
 void loop_ssr_control(void);
 void loop_main_power_supervisor(void);
