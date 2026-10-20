@@ -229,7 +229,9 @@ void loop_autowbleed(void)
 // Maintains standing pan water buffer without sucking air or overflowing the tank.
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
-float scavenge_pwm_trim = 0.0f; // Adaptive float-seeking offset from base_pwm in PWM %
+float scavenge_pwm_trim = 0.0f;           // Adaptive float-seeking offset from base_pwm in PWM %
+float scavenge_segment_start_trim = 0.0f; // Trim at start of current float state (for anti-windup midpoint)
+float scavenge_last_del_pwm = 0.0f;       // Previous delivery PWM to detect manual/PID flow steps
 bool scavenge_last_tank_full = false;
 unsigned long scavenge_tank_full_last_time = 0;
 
@@ -237,6 +239,8 @@ void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
     scavenge_pwm_trim = 0.0f;
+    scavenge_segment_start_trim = 0.0f;
+    scavenge_last_del_pwm = sc_setperc[RPUMPD];
     scavenge_last_tank_full = tank_full;
     return;
   }
@@ -248,27 +252,46 @@ void loop_autoscavengecontrol(void)
   unsigned long now = millis();
 
   // 1. Proportional Delivery Speed Tracking (Feedforward Base / Initialisation):
+  // Empirical clean-filter equilibrium ratio is ~1.10x (31%->34.1%, 41%->45.1%, 51%->56.1%)
   float del_pwm = sc_setperc[RPUMPD];
-  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.35f) : 20.0f;
+  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.10f) : 20.0f;
 
-  // 2. Pure Unclamped Seeking Controller around top float switch (tank_full):
-  // - tank_full == true: ALWAYS decrease recovery PWM (-2.0% on rising edge, then -0.05% per 500ms = -0.10%/s).
-  // - tank_full == false: ALWAYS increase recovery PWM (+1.0% on falling edge, then +0.025% per 500ms = +0.05%/s).
+  // Reset segment windup reference if delivery PWM was stepped
+  if (fabs(del_pwm - scavenge_last_del_pwm) > 0.5f) {
+    scavenge_segment_start_trim = scavenge_pwm_trim;
+    scavenge_last_del_pwm = del_pwm;
+  }
+
+  // 2. Unclamped Seeking Controller with Anti-Windup Midpoint Return around top float (tank_full):
+  // - Symmetric ramp rate: +/-0.04% per 500ms = +/-0.08%/s (4.8%/min) in both directions.
+  // - On float state transition: rolls back 50% of the continuous ramp accumulated during that
+  //   half-cycle (cancelling double-integrator level windup) and applies a +/-1.5% hysteresis step.
   if (tank_full) {
     scavenge_tank_full_last_time = now;
     if (!scavenge_last_tank_full) {
-      scavenge_pwm_trim -= 2.0f; // Immediate step down when top float triggers
+      float ramp_delta = scavenge_pwm_trim - scavenge_segment_start_trim;
+      if (ramp_delta > 0.0f) {
+        scavenge_pwm_trim -= 0.5f * ramp_delta; // Roll back half of upward windup
+      }
+      scavenge_pwm_trim -= 1.5f; // Immediate hysteresis step down when top float triggers
+      scavenge_segment_start_trim = scavenge_pwm_trim;
     } else {
-      scavenge_pwm_trim -= 0.05f; // Continuous slow decrement (-0.10%/s) with no artificial floor
+      scavenge_pwm_trim -= 0.04f; // Continuous decrement (-0.08%/s)
     }
   } else if (del_pwm >= 15.0f) {
     if (scavenge_last_tank_full) {
-      scavenge_pwm_trim += 1.0f; // Immediate step up when top float clears
+      float ramp_delta = scavenge_pwm_trim - scavenge_segment_start_trim;
+      if (ramp_delta < 0.0f) {
+        scavenge_pwm_trim -= 0.5f * ramp_delta; // Roll back half of downward windup
+      }
+      scavenge_pwm_trim += 1.5f; // Immediate hysteresis step up when top float clears
+      scavenge_segment_start_trim = scavenge_pwm_trim;
     } else {
-      scavenge_pwm_trim += 0.025f; // Continuous slow increment (+0.05%/s) with no artificial ceiling
+      scavenge_pwm_trim += 0.04f; // Continuous increment (+0.08%/s)
     }
   } else {
     scavenge_pwm_trim = 0.0f;
+    scavenge_segment_start_trim = 0.0f;
   }
   scavenge_last_tank_full = tank_full;
 
