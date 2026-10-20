@@ -155,6 +155,13 @@ void serialcmd(char cmd)
       btLog("Calling setpump_perc(RPUMPD, " + String(sc_setperc[RPUMPD] - 5) + ")");
       setpump_perc(RPUMPD, sc_setperc[RPUMPD] - 5);
     }
+
+    // In WASH_HEATER_CTRL, update wash_locked_flow to reflect manual pump speed nudges
+    if (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) {
+      wash_locked_flow = constrain(getlpmFrompwm(sc_setperc[RPUMPD], modeld), 3.0f, 8.5f);
+      btLog("WASH_HEATER_CTRL: Manual tune updated wash_locked_flow to " + String(wash_locked_flow, 2) + 
+            " LPM (" + String((int)sc_setperc[RPUMPD]) + "% PWM)");
+    }
   }
 
   // Advance next state specifier

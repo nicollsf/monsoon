@@ -40,6 +40,7 @@ pumpmodel pumpcalib_fit(const std::vector<float>& pwms, const std::vector<float>
 void pumpcalib_savemodels(void);
 void pumpcalib_loadmodels(void);
 float getpwmFromlpm(float targetlpm, pumpmodel m);
+float getlpmFrompwm(float targetpwm, pumpmodel m);
 void setpump_lpm(int rpump, float lpm);
 
 // Thermal calibration and stall enclosure profiles

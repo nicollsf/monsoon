@@ -400,6 +400,17 @@ float getpwmFromlpm(float targetlpm, pumpmodel m) {
   return constrain(pwm, 0, 100);
 }
 
+float getlpmFrompwm(float targetpwm, pumpmodel m) {
+  if (targetpwm <= m.offset) return 0.0f;
+  if (m.a <= 0.001f || m.b <= 0.001f) {
+    // Linear fallback if fit parameters uninitialized
+    return constrain((targetpwm - 10.0f) * (10.0f / 90.0f), 0.0f, 10.0f);
+  }
+  float flow = m.a * pow(targetpwm - m.offset, m.b);
+  if (flow > m.maxflow) flow = m.maxflow;
+  return constrain(flow, 0.0f, 10.0f);
+}
+
 void setpump_lpm(int rpump, float lpm) {
   // Hard safety limit on delivery pump flow rate.
   const float MAX_DELIVERY_LPM = 9.0f;
@@ -724,8 +735,16 @@ void setup_tempcontrolwithspeed(void)
 {
   // Set the target temperature for the PID controller.
   tc_pidsetpoint = temp_setpoint;
-  // Initialize PID output to conservative starting flow (4.0 LPM)
-  tc_pidoutput = 4.0;
+  
+  // Bumpless initialization: Seed PID output with current established flow if valid, else 4.0 LPM
+  float seed_flow = 4.0f;
+  if (flow_lpm0 >= 3.0f && flow_lpm0 <= 8.5f) {
+    seed_flow = flow_lpm0;
+  }
+  tc_pidoutput = seed_flow;
+  last_applied_del_flow = seed_flow;
+  last_del_slew_time = millis();
+
   // Set the operational mode to automatic.
   myPID.SetMode(AUTOMATIC);
   // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
@@ -734,8 +753,6 @@ void setup_tempcontrolwithspeed(void)
   // Evaluate every 2500 ms (damped to align with ~20s recirculating loop transport delay)
   myPID.SetSampleTime(2500);
   wash_speed_start_time = millis();
-  last_del_slew_time = 0;
-  last_applied_del_flow = 3.5f;
 }
 
 void loop_tempcontrolwithspeed(void)

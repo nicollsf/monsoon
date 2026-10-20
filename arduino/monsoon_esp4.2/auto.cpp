@@ -28,6 +28,7 @@ static float wash_temp_max = 0.0f;
 static float wash_flow_sum = 0.0f;
 static unsigned long wash_flow_count = 0;
 float wash_locked_flow = 5.0f;
+static unsigned long last_heater_fallback_time = 0;
 //int auto_substatechange = 0;
 
 
@@ -297,8 +298,8 @@ void loop_autoscavengecontrol(void)
       delta_i = 0.0f;
     }
 
-    // Anti-windup bounded trim between -15% and +15% PWM
-    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -15.0f, 15.0f);
+    // Anti-windup bounded trim between -6% and +8% PWM (prevents deep speed collapses)
+    auto_scavenge_integral = constrain(auto_scavenge_integral + delta_i, -6.0f, 8.0f);
   } else {
     auto_scavenge_integral = 0.0f;
   }
@@ -722,8 +723,10 @@ void loop_autowash(void)
 
       // Check transition to WASH_HEATER_CTRL:
       // Transition requires reliably observed recovery pump signal in excess of 78% AND verified heater headroom.
-      // 1. Initial settling guard: Give inner speed PID (TCSPEED) at least 30s to ramp and stabilize flow
-      bool settling_done = (millis() - auto_substatestime >= 30000);
+      // 1. Initial settling guard: Give inner speed PID (TCSPEED) at least 30s to ramp and stabilize flow,
+      //    and at least 60s cooldown if previously fell back from WASH_HEATER_CTRL due to heater saturation.
+      bool settling_done = (millis() - auto_substatestime >= 30000) &&
+                           (last_heater_fallback_time == 0 || millis() - last_heater_fallback_time >= 60000);
 
       // 2. Verified heater headroom:
       //    - Water temperature is within 0.5C of setpoint (or above setpoint)
@@ -784,6 +787,27 @@ void loop_autowash(void)
           wash_locked_flow = max(3.5f, wash_locked_flow - 0.05f); // Trim 0.05 LPM/s
           btLog("WASH_HEATER_CTRL: High recovery load (" + String(sc_setperc[RPUMPR], 0) + "%). Trimming delivery flow to " + String(wash_locked_flow, 2) + " LPM.");
         }
+      }
+
+      // Thermal fallback guard: If heaters are maxed out (SSR duty >= 98% and Aux ON = 6.0 kW)
+      // and temperature is below setpoint continuously for >= 30 seconds, fall back to WASH_FLOW_CTRL
+      // so speed PID (TCSPEED) can reduce flow and recover water temperature.
+      static unsigned long htr_saturated_start = 0;
+      bool htrs_saturated = (ssr_main_duty >= 0.98f && getrelay_en(RPHEATERA) == RON && (temp1 < temp_setpoint - 0.3f));
+      if (htrs_saturated) {
+        if (htr_saturated_start == 0) {
+          htr_saturated_start = millis();
+        } else if (millis() - htr_saturated_start >= 30000) {
+          btLog("WASH_HEATER_CTRL: Heaters maxed at 6.0 kW for 30s with temp " + String(temp1, 1) + 
+                "C < SP " + String(temp_setpoint, 1) + "C. Falling back to WASH_FLOW_CTRL.");
+          htr_saturated_start = 0;
+          last_heater_fallback_time = millis();
+          temp_controlmode = TCSPEED;
+          auto_switchsubstate(WASH_FLOW_CTRL);
+          break;
+        }
+      } else {
+        htr_saturated_start = 0;
       }
       break;
     }
@@ -1377,6 +1401,7 @@ void auto_switchstate(int state, String reason)
     wash_flow_sum = 0.0f;
     wash_flow_count = 0;
     wash_locked_flow = 5.0f;
+    last_heater_fallback_time = 0;
   }
   if( auto_state==STATE_FILL ) {
     fill_overfill_count = 0;
