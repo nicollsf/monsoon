@@ -128,7 +128,7 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
     * Proportional delivery tracking base: $\text{PWM}_{\text{base}} = 1.35 \times \text{PWM}_{\text{del}}$.
     * While `tank_full == false`: Adaptive trim creeps upward at $+0.05\%\text{ PWM/sec}$ ($+3\%\text{/min}$, authority up to $+25\%$) to maintain pan buffer and naturally overcome progressive filter clogging.
     * When `tank_full == true`: Steps down $-2.0\%$ immediately, then decrements at $-0.10\%\text{ PWM/sec}$ (clamped to $-8\%$) to settle level $\sim 15\text{mm}$ below the top float switch without surging or overflowing.
-    * 1.5s EMA smoothing + rate limiting ($+5\%/\text{s}$ rise, $-8\%/\text{s}$ drop) for quiet, stable operation.
+    * Direct, lag-free output: Tracks delivery in exact lockstep without phase lag or fighting filters (delivery itself handles flow rate limiting).
     * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
 * **Flow & Temperature Sensor Filtering:**
   * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.

@@ -285,34 +285,8 @@ void loop_autoscavengecontrol(void)
   scavenge_delta_lpm = scavenge_pwm_trim / 14.0f;
   auto_scavenge_target_lpm = max(1.2f, flow_lpm0 + scavenge_delta_lpm);
   
-  // 1. Exponential Moving Average (EMA) Low-Pass Smoothing:
-  // Dampen high-frequency noise from turbulent flow pulses in the scavenge pan.
-  static float smoothed_target_pwm = 20.0f;
-  static float last_applied_pwm = 20.0f;
-  static unsigned long last_slew_time = 0;
-
-  if (now - last_slew_time > 2000) {
-    smoothed_target_pwm = raw_target_pwm;
-    last_applied_pwm = raw_target_pwm; // Re-align after state transition or long pause
-  } else {
-    // EMA smoothing (alpha = 0.35 -> ~1.5s time constant at 500ms sample interval)
-    smoothed_target_pwm = (0.35f * raw_target_pwm) + (0.65f * smoothed_target_pwm);
-
-    // 2. Slew Rate Limiter:
-    // Maximum rise: +2.5% PWM per 500ms (+5.0% PWM/sec) upward, -4.0% PWM per 500ms downward
-    float max_up = 2.5f;
-    float max_down = 4.0f;
-    if (smoothed_target_pwm > last_applied_pwm + max_up) {
-      last_applied_pwm += max_up;
-    } else if (smoothed_target_pwm < last_applied_pwm - max_down) {
-      last_applied_pwm -= max_down;
-    } else {
-      last_applied_pwm = smoothed_target_pwm;
-    }
-  }
-  last_slew_time = now;
-
-  setpump_perc(RPUMPR, last_applied_pwm);
+  // Direct, lag-free hardware command: Recovery tracks delivery in exact lockstep without phase delay
+  setpump_perc(RPUMPR, raw_target_pwm);
 }
 
 
