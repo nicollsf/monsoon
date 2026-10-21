@@ -225,7 +225,7 @@ void loop_autowbleed(void)
 }
 
 
-// Auto scavenge control: Float-Centric PWM Balancing
+// Auto scavenge control: Float-Centric Additive PWM Balancing
 // Maintains standing pan water buffer without sucking air or overflowing the tank.
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
@@ -238,8 +238,10 @@ unsigned long scavenge_tank_full_last_time = 0;
 void loop_autoscavengecontrol(void)
 {
   if( !auto_scavengecontrolenable ) {
-    scavenge_pwm_trim = 0.0f;
-    scavenge_segment_start_trim = 0.0f;
+    if (auto_state == STATE_OFF || auto_state == STATE_FILL) {
+      scavenge_pwm_trim = 0.0f;
+      scavenge_segment_start_trim = 0.0f;
+    }
     scavenge_last_del_pwm = sc_setperc[RPUMPD];
     scavenge_last_tank_full = tank_full;
     return;
@@ -1310,7 +1312,10 @@ void auto_switchsubstate(int substate)
   if (!(auto_state == STATE_WASH && (substate == WASH_FLOW_CTRL || substate == WASH_HEATER_CTRL)) &&
       !(auto_state == STATE_WARM && old_substate == WARM_RAMP && substate == WARM_HOLD) &&
       !(auto_state == STATE_CALIBT)) {
-    scavenge_pwm_trim = 0.0f;
+    if (auto_state != STATE_WARM && auto_state != STATE_WASH) {
+      scavenge_pwm_trim = 0.0f;
+      scavenge_segment_start_trim = 0.0f;
+    }
     rpinsen_reset();
     pumpsen_reset();
   }
@@ -1431,7 +1436,10 @@ void auto_switchstate(int state, String reason)
 
   // Disable auto circuits
   auto_woverflowstopenable = auto_woverflowopenenable = auto_wtopupenable = auto_wburpenable = auto_wbleedenable = auto_scavengecontrolenable = 0;
-  scavenge_pwm_trim = 0.0f;
+  if (auto_state == STATE_OFF || auto_state == STATE_FILL) {
+    scavenge_pwm_trim = 0.0f;
+    scavenge_segment_start_trim = 0.0f;
+  }
   auto_wtopup_timeout = 10000;  // Reset topup timeout to default
   auto_wtopup_interval = 10000; // Reset topup repeat guard to default
 }
