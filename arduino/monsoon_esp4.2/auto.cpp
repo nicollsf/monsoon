@@ -252,9 +252,9 @@ void loop_autoscavengecontrol(void)
   unsigned long now = millis();
 
   // 1. Proportional Delivery Speed Tracking (Feedforward Base / Initialisation):
-  // Empirical clean-filter equilibrium ratio is ~1.10x (31%->34.1%, 41%->45.1%, 51%->56.1%)
+  // Empirical clean-filter equilibrium ratio is ~1.13x (31%->35.0%, 41%->46.3%, 51%->57.6%)
   float del_pwm = sc_setperc[RPUMPD];
-  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.10f) : 20.0f;
+  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.13f) : 20.0f;
 
   // Reset segment windup reference if delivery PWM was stepped
   if (fabs(del_pwm - scavenge_last_del_pwm) > 0.5f) {
@@ -695,15 +695,9 @@ void loop_autowash(void)
       bool settling_done = (millis() - auto_substatestime >= 30000) &&
                            (last_heater_fallback_time == 0 || millis() - last_heater_fallback_time >= 60000);
 
-      // 2. Verified heater headroom:
-      //    - Water temperature is within 0.5C of setpoint (or above setpoint)
-      //    - Steady-state power to maintain setpoint at this flow rate is <= 5.5 kW (leaves >= 0.5 kW downward modulating headroom on 4 kW Main SSR)
-      float q_ratio = (active_thermal_model.ref_flow_lpm > 0.1f) ? (flow_lpm0 / active_thermal_model.ref_flow_lpm) : 1.0f;
-      float ua_eff = active_thermal_model.ua_w_per_c * (0.5f + 0.5f * q_ratio);
-      float amb = (ambient_water_cold >= 10.0f && ambient_water_cold <= 30.0f) ? ambient_water_cold : 20.0f;
-      float p_expected_kw = ua_eff * (temp_setpoint - amb) / 1000.0f;
-
-      bool heater_headroom = (temp1 > -500.0f) && (temp1 >= temp_setpoint - 0.5f) && (p_expected_kw <= 5.5f);
+      // 2. Verified physical heater headroom:
+      //    Water temperature is within 0.5C of setpoint (or above setpoint) while running at 6.0 kW.
+      bool heater_headroom = (temp1 > -500.0f) && (temp1 >= temp_setpoint - 0.5f);
 
       // 3. Reliably observed recovery pump signal in excess of 78% sustained continuously for >= 8.0 seconds
       static unsigned long rec_high_start = 0;
@@ -711,15 +705,16 @@ void loop_autowash(void)
         if (rec_high_start == 0) rec_high_start = millis();
         if (millis() - rec_high_start >= 8000) {
           rec_high_start = 0;
-          wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f);
+          wash_locked_flow = constrain(flow_lpm0, 3.6f, 8.5f);
 
-          p_expected_kw = constrain(p_expected_kw, 2.0f, 6.0f);
-          float main_kw = constrain(p_expected_kw - 2.0f, 0.0f, 4.0f);
-          float initial_duty = main_kw / 4.0f;
+          // Pre-seed Main SSR duty (~80% at setpoint, scaled down immediately if water is currently hotter than setpoint)
+          float over_temp = max(0.0f, temp1 - temp_setpoint);
+          float initial_duty = constrain(0.80f - (0.15f * over_temp), 0.25f, 0.85f);
+          float initial_kw = 2.0f + (4.0f * initial_duty);
 
           btLog("WASH: Reliably observed recovery load >78% (" + String(sc_setperc[RPUMPR], 1) + 
-                "%) with heater headroom (" + String(p_expected_kw, 2) + " kW). Locking delivery flow to " + 
-                String(wash_locked_flow, 2) + " LPM. Entering WASH_HEATER_CTRL.");
+                "%) with temp " + String(temp1, 1) + "C >= SP-0.5C. Locking delivery flow to " + 
+                String(wash_locked_flow, 2) + " LPM (Initial power=" + String(initial_kw, 2) + " kW). Entering WASH_HEATER_CTRL.");
 
           setup_tempcontrolwithheater(initial_duty);
           auto_switchsubstate(WASH_HEATER_CTRL);

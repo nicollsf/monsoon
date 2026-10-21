@@ -470,9 +470,9 @@ void loop_tempcontrolwithspeed(void);
 //   PID temperature control using delivery speed
 // ----------------------------------------------------------------------
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-// Damped tuning for 20s transport-delay recirculating loop:
-// Kp=0.35 (gentle proportional action), Ki=0.003 (slow anti-windup integration), Kd=0.4 (rate damping)
-double tc_Kp = 0.35, tc_Ki = 0.003, tc_Kd = 0.4;
+// Responsive tuning for 6.0 kW flow-based control:
+// Kp=0.80 (+1.2 LPM per +1.5C error), Ki=0.025 (+2.25 LPM/min at +1.5C error), Kd=0.40 (rate damping)
+double tc_Kp = 0.80, tc_Ki = 0.025, tc_Kd = 0.40;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 // ----------------------------------------------------------------------
@@ -713,25 +713,30 @@ static unsigned long last_del_slew_time = 0;
 
 void setup_tempcontrolwithspeed(void)
 {
-  // Set the target temperature for the PID controller.
+  // Set the target temperature and current input for the PID controller.
   tc_pidsetpoint = temp_setpoint;
+  if (temp1 > -500.0f) {
+    tc_pidinput = temp1;
+  } else {
+    tc_pidinput = temp_setpoint;
+  }
   
-  // Bumpless initialization: Seed PID output with current established flow if valid, else 4.0 LPM
-  float seed_flow = 4.0f;
-  if (flow_lpm0 >= 3.0f && flow_lpm0 <= 8.5f) {
+  // Bumpless initialization: Seed PID output with current established flow if >= 4.2 LPM, else 4.2 LPM
+  float seed_flow = 4.2f;
+  if (flow_lpm0 >= 4.2f && flow_lpm0 <= 8.5f) {
     seed_flow = flow_lpm0;
   }
   tc_pidoutput = seed_flow;
   last_applied_del_flow = seed_flow;
   last_del_slew_time = millis();
 
-  // Set the operational mode to automatic.
+  // Force MANUAL -> AUTOMATIC transition so PID_v1 re-initializes ITerm to seed_flow
+  myPID.SetMode(MANUAL);
+  // Set output limits in Litres Per Minute (LPM): 3.6 to 8.5 LPM
+  myPID.SetOutputLimits(3.6, 8.5); 
+  // Evaluate every 2000 ms
+  myPID.SetSampleTime(2000);
   myPID.SetMode(AUTOMATIC);
-  // Set output limits in Litres Per Minute (LPM): 3.0 to 8.5 LPM
-  // Allows Monsoon high-flow delivery up to recovery pump capacity
-  myPID.SetOutputLimits(3.0, 8.5); 
-  // Evaluate every 2500 ms (damped to align with ~20s recirculating loop transport delay)
-  myPID.SetSampleTime(2500);
   wash_speed_start_time = millis();
 }
 
@@ -745,22 +750,22 @@ void loop_tempcontrolwithspeed(void)
   float desired_flow = (float)tc_pidoutput;
 
   // Startup Soft-Start (during WASH_SOFTSTART substate):
-  // Rate-limited ramp: Start at 3.5 LPM and ramp smoothly towards target.
+  // Rate-limited ramp: Start at 3.6 LPM and ramp smoothly towards target.
   bool in_softstart = (auto_state == STATE_WASH && auto_substate == WASH_SOFTSTART);
   if (in_softstart) {
-    float max_soft_ramp = 3.5f + ((now - auto_substatestime) / 1000.0f) * 0.4f;
+    float max_soft_ramp = 3.6f + ((now - auto_substatestime) / 1000.0f) * 0.4f;
     desired_flow = min(desired_flow, max_soft_ramp);
   }
 
-  // Constrain between safe bounds [3.0, 8.5] LPM
-  desired_flow = constrain(desired_flow, 3.0f, 8.5f);
+  // Constrain between safe bounds [3.6, 8.5] LPM
+  desired_flow = constrain(desired_flow, 3.6f, 8.5f);
 
-  // Slew rate limiter: Maximum change of +/- 0.12 LPM per second to eliminate hunting/oscillations
+  // Slew rate limiter: Maximum change of +/- 0.20 LPM per second
   if (last_del_slew_time == 0 || now - last_del_slew_time > 3000) {
     last_applied_del_flow = desired_flow;
   } else {
     float dt_s = (now - last_del_slew_time) / 1000.0f;
-    float max_step = max(0.02f, 0.12f * dt_s);
+    float max_step = max(0.02f, 0.20f * dt_s);
     if (desired_flow > last_applied_del_flow + max_step) {
       desired_flow = last_applied_del_flow + max_step;
     } else if (desired_flow < last_applied_del_flow - max_step) {
