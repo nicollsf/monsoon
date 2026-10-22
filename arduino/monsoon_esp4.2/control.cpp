@@ -470,9 +470,9 @@ void loop_tempcontrolwithspeed(void);
 //   PID temperature control using delivery speed
 // ----------------------------------------------------------------------
 double tc_pidsetpoint, tc_pidinput, tc_pidoutput;
-// Responsive tuning for 6.0 kW flow-based control:
-// Kp=0.80 (+1.2 LPM per +1.5C error), Ki=0.025 (+2.25 LPM/min at +1.5C error), Kd=0.40 (rate damping)
-double tc_Kp = 0.80, tc_Ki = 0.025, tc_Kd = 0.40;
+// Damped tuning for 6.0 kW flow-based control (accounting for ~18s process dead time):
+// Kp=0.35 (+0.35 LPM per +1.0C error), Ki=0.015 (+0.9 LPM/min at +1.0C error), Kd=0.15 (gentle phase lead)
+double tc_Kp = 0.35, tc_Ki = 0.015, tc_Kd = 0.15;
 PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REVERSE);
 
 // ----------------------------------------------------------------------
@@ -480,10 +480,10 @@ PID myPID(&tc_pidinput, &tc_pidoutput, &tc_pidsetpoint, tc_Kp, tc_Ki, tc_Kd, REV
 // ----------------------------------------------------------------------
 double htr_pidsetpoint, htr_pidinput, htr_pidoutput;
 // DIRECT mode: if temp1 < setpoint (error > 0), increase heat output (higher SSR duty)
-// htr_Kp: 0.08 duty per deg C (320 W per deg C offset)
-// htr_Ki: 0.002 duty per sec (smooth integral accumulation)
-// htr_Kd: 0.4 duty per (deg C / sec) rate of change
-double htr_Kp = 0.08, htr_Ki = 0.002, htr_Kd = 0.4;
+// htr_Kp: 0.25 duty per deg C (1000 W per deg C offset; 50% duty swing for 2.0C error)
+// htr_Ki: 0.008 duty per sec (smooth assertive integral accumulation: 0.24 duty in 30s)
+// htr_Kd: 0.50 duty per (deg C / sec) rate of change
+double htr_Kp = 0.25, htr_Ki = 0.008, htr_Kd = 0.50;
 PID htrPID(&htr_pidinput, &htr_pidoutput, &htr_pidsetpoint, htr_Kp, htr_Ki, htr_Kd, DIRECT);
 
 void setup_tempcontrolwithheater(float initial_duty) {
@@ -500,7 +500,7 @@ void setup_tempcontrolwithheater(float initial_duty) {
 
   htrPID.SetMode(MANUAL);
   htrPID.SetOutputLimits(0.05, 1.0); // 5% (200W) to 100% (4000W) Main SSR duty
-  htrPID.SetSampleTime(2000);        // 2000 ms sample period (smooth, slow heater loop)
+  htrPID.SetSampleTime(1500);        // 1500 ms sample period (responsive heater loop)
   htrPID.SetMode(AUTOMATIC);
 
   setrelay_en(RPHEATERA, RON); // 2kW Aux kettle element provides stable base heat
@@ -721,9 +721,9 @@ void setup_tempcontrolwithspeed(void)
     tc_pidinput = temp_setpoint;
   }
   
-  // Bumpless initialization: Seed PID output with current established flow if >= 4.2 LPM, else 4.2 LPM
+  // Bumpless initialization: Seed PID output with current established flow if >= 3.6 LPM, else 4.2 LPM
   float seed_flow = 4.2f;
-  if (flow_lpm0 >= 4.2f && flow_lpm0 <= 8.5f) {
+  if (flow_lpm0 >= 3.6f && flow_lpm0 <= 8.5f) {
     seed_flow = flow_lpm0;
   }
   tc_pidoutput = seed_flow;
@@ -734,8 +734,8 @@ void setup_tempcontrolwithspeed(void)
   myPID.SetMode(MANUAL);
   // Set output limits in Litres Per Minute (LPM): 3.6 to 8.5 LPM
   myPID.SetOutputLimits(3.6, 8.5); 
-  // Evaluate every 2000 ms
-  myPID.SetSampleTime(2000);
+  // Evaluate every 2500 ms (frequency separation from process dead time)
+  myPID.SetSampleTime(2500);
   myPID.SetMode(AUTOMATIC);
   wash_speed_start_time = millis();
 }
@@ -760,18 +760,16 @@ void loop_tempcontrolwithspeed(void)
   // Constrain between safe bounds [3.6, 8.5] LPM
   desired_flow = constrain(desired_flow, 3.6f, 8.5f);
 
-  // Slew rate limiter: Maximum change of +/- 0.20 LPM per second
+  // Slew rate limiter: Maximum change of +/- 0.12 LPM per second (glides smoothly across dead time)
   if (last_del_slew_time == 0 || now - last_del_slew_time > 3000) {
     last_applied_del_flow = desired_flow;
   } else {
     float dt_s = (now - last_del_slew_time) / 1000.0f;
-    float max_step = max(0.02f, 0.20f * dt_s);
-    if (desired_flow > last_applied_del_flow + max_step) {
-      desired_flow = last_applied_del_flow + max_step;
-    } else if (desired_flow < last_applied_del_flow - max_step) {
-      desired_flow = last_applied_del_flow - max_step;
+    if (dt_s > 0.0f) {
+      float max_step = 0.12f * dt_s;
+      desired_flow = constrain(desired_flow, last_applied_del_flow - max_step, last_applied_del_flow + max_step);
+      last_applied_del_flow = desired_flow;
     }
-    last_applied_del_flow = desired_flow;
   }
   last_del_slew_time = now;
 

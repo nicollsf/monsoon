@@ -297,8 +297,10 @@ void loop_autoscavengecontrol(void)
   }
   scavenge_last_tank_full = tank_full;
 
-  // Combine base + seeking trim, clamped only to physical [0%, 100%] PWM range (with anti-windup)
-  float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, 100.0f);
+  // Combine base + seeking trim, clamped to physical [0%, 100%] PWM range.
+  // In WASH_HEATER_CTRL, cap recovery at 82% to avoid cavitation; any tank deficit is balanced by trimming delivery flow.
+  float max_rec_pwm = (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) ? 82.0f : 100.0f;
+  float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, max_rec_pwm);
   scavenge_pwm_trim = raw_target_pwm - base_pwm;
 
   // Direct, lag-free hardware command: Recovery tracks delivery in exact lockstep without phase delay
@@ -707,7 +709,8 @@ void loop_autowash(void)
         if (rec_high_start == 0) rec_high_start = millis();
         if (millis() - rec_high_start >= 8000) {
           rec_high_start = 0;
-          wash_locked_flow = constrain(flow_lpm0, 3.6f, 8.5f);
+          // Cap locked flow to 6.5 LPM (or current flow - 0.2 LPM) so recovery operates comfortably <= 78% without cavitation
+          wash_locked_flow = constrain(min(flow_lpm0 - 0.2f, 6.5f), 3.6f, 6.5f);
 
           // Pre-seed Main SSR duty (~80% at setpoint, scaled down immediately if water is currently hotter than setpoint)
           float over_temp = max(0.0f, temp1 - temp_setpoint);
@@ -742,14 +745,15 @@ void loop_autowash(void)
       // Maintain locked delivery flow
       setpump_lpm(RPUMPD, wash_locked_flow);
 
-      // Hydraulic safety guard: If recovery PWM climbs excessively high (filter restriction develops),
-      // gently trim the locked delivery flow rate
+      // Hydraulic balance & anti-starvation guard:
+      // If recovery pump is operating near ceiling (>= 80% PWM) and tank level is lost (!tank_full),
+      // or if recovery hits >= 85%, trim delivery flow downward to balance throughput and prevent tank starvation
       static unsigned long last_rec_guard = 0;
       if (millis() - last_rec_guard >= 1000) {
         last_rec_guard = millis();
-        if (sc_setperc[RPUMPR] >= 88.0f) {
-          wash_locked_flow = max(3.5f, wash_locked_flow - 0.05f); // Trim 0.05 LPM/s
-          btLog("WASH_HEATER_CTRL: High recovery load (" + String(sc_setperc[RPUMPR], 0) + "%). Trimming delivery flow to " + String(wash_locked_flow, 2) + " LPM.");
+        if ((sc_setperc[RPUMPR] >= 80.0f && !tank_full) || (sc_setperc[RPUMPR] >= 85.0f)) {
+          wash_locked_flow = max(3.5f, wash_locked_flow - 0.04f); // Trim 0.04 LPM/s
+          btLog("WASH_HEATER_CTRL: High recovery load (" + String(sc_setperc[RPUMPR], 0) + "%" + (!tank_full ? " low level" : "") + "). Trimming delivery flow to " + String(wash_locked_flow, 2) + " LPM.");
         }
       }
 
