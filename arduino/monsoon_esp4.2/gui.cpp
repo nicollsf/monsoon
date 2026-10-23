@@ -156,11 +156,13 @@ void serialcmd(char cmd)
       setpump_perc(RPUMPD, sc_setperc[RPUMPD] - 5);
     }
 
-    // In WASH_HEATER_CTRL, update wash_locked_flow to reflect manual pump speed nudges
+    // In WASH_HEATER_CTRL, update scavenge_pwm_trim so manual pump speed nudges shift the seeking baseline
     if (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) {
+      float nudge = (cmd == 'C') ? +5.0f : -5.0f;
+      scavenge_pwm_trim = constrain(scavenge_pwm_trim - (1.13f * nudge), -30.0f, 30.0f);
       wash_locked_flow = constrain(getlpmFrompwm(sc_setperc[RPUMPD], modeld), 3.0f, 8.5f);
-      btLog("WASH_HEATER_CTRL: Manual tune updated wash_locked_flow to " + String(wash_locked_flow, 2) + 
-            " LPM (" + String((int)sc_setperc[RPUMPD]) + "% PWM)");
+      btLog("WASH_HEATER_CTRL: Manual tune updated delivery to " + String((int)sc_setperc[RPUMPD]) + 
+            "% (" + String(wash_locked_flow, 2) + " LPM, trim=" + String(scavenge_pwm_trim, 1) + "%)");
     }
   }
 

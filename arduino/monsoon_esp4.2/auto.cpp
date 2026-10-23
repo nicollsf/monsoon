@@ -225,15 +225,18 @@ void loop_autowbleed(void)
 }
 
 
-// Auto scavenge control: Float-Centric Additive PWM Balancing
+// Auto scavenge control: Unified Dual-Mode Additive PWM Balancing
 // Maintains standing pan water buffer without sucking air or overflowing the tank.
+// Mode 1 (WARM & WASH_FLOW_CTRL): Recovery = (Delivery * 1.13) + scavenge_pwm_trim
+// Mode 2 (WASH_HEATER_CTRL):      Delivery = (80.0% - scavenge_pwm_trim) / 1.13, Recovery fixed at 80%
 int auto_scavengecontrolenable = 0;
 unsigned long auto_scavengecontrolstime = 0;
-float scavenge_pwm_trim = 0.0f;           // Adaptive float-seeking offset from base_pwm in PWM %
+float scavenge_pwm_trim = 0.0f;           // Adaptive float-seeking trim offset in PWM %
 float scavenge_segment_start_trim = 0.0f; // Trim at start of current float state (for anti-windup midpoint)
 float scavenge_last_del_pwm = 0.0f;       // Previous delivery PWM to detect manual/PID flow steps
 bool scavenge_last_tank_full = false;
 unsigned long scavenge_tank_full_last_time = 0;
+const float FIXED_HEATER_REC_PWM = 80.0f;
 
 void loop_autoscavengecontrol(void)
 {
@@ -251,29 +254,18 @@ void loop_autoscavengecontrol(void)
 
   if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
 
-  // In WASH_HEATER_CTRL: Recovery pump is locked at a fixed 80% PWM.
-  // Tank level is controlled by delivery flow modulation.
-  if (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) {
-    setpump_perc(RPUMPR, 80.0f);
-    scavenge_last_del_pwm = sc_setperc[RPUMPD];
-    scavenge_last_tank_full = tank_full;
-    return;
-  }
-
   unsigned long now = millis();
+  bool in_heater_ctrl = (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL);
 
-  // 1. Proportional Delivery Speed Tracking (Feedforward Base / Initialisation):
-  // Empirical clean-filter equilibrium ratio is ~1.13x (31%->35.0%, 41%->46.3%, 51%->57.6%)
   float del_pwm = sc_setperc[RPUMPD];
-  float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.13f) : 20.0f;
 
-  // Reset segment windup reference if delivery PWM was stepped
-  if (fabs(del_pwm - scavenge_last_del_pwm) > 0.5f) {
+  // In Mode 1, reset segment windup reference if delivery PWM was stepped by PID/manual
+  if (!in_heater_ctrl && fabs(del_pwm - scavenge_last_del_pwm) > 0.5f) {
     scavenge_segment_start_trim = scavenge_pwm_trim;
     scavenge_last_del_pwm = del_pwm;
   }
 
-  // 2. Unclamped Seeking Controller with Anti-Windup Midpoint Return around top float (tank_full):
+  // Float-seeking dynamics on scavenge_pwm_trim with anti-windup midpoint return:
   // - Symmetric ramp rate: +/-0.04% per 500ms = +/-0.08%/s (4.8%/min) in both directions.
   // - On float state transition: rolls back 50% of the continuous ramp accumulated during that
   //   half-cycle (cancelling double-integrator level windup) and applies a +/-1.5% hysteresis step.
@@ -284,18 +276,18 @@ void loop_autoscavengecontrol(void)
       if (ramp_delta > 0.0f) {
         scavenge_pwm_trim -= 0.5f * ramp_delta; // Roll back half of upward windup
       }
-      scavenge_pwm_trim -= 1.5f; // Immediate hysteresis step down when top float triggers
+      scavenge_pwm_trim -= 1.5f; // Hysteresis step: recovery decreases (Mode 1) or delivery increases (Mode 2)
       scavenge_segment_start_trim = scavenge_pwm_trim;
     } else {
       scavenge_pwm_trim -= 0.04f; // Continuous decrement (-0.08%/s)
     }
-  } else if (del_pwm >= 15.0f) {
+  } else if (del_pwm >= 15.0f || in_heater_ctrl) {
     if (scavenge_last_tank_full) {
       float ramp_delta = scavenge_pwm_trim - scavenge_segment_start_trim;
       if (ramp_delta < 0.0f) {
         scavenge_pwm_trim -= 0.5f * ramp_delta; // Roll back half of downward windup
       }
-      scavenge_pwm_trim += 1.5f; // Immediate hysteresis step up when top float clears
+      scavenge_pwm_trim += 1.5f; // Hysteresis step: recovery increases (Mode 1) or delivery decreases (Mode 2)
       scavenge_segment_start_trim = scavenge_pwm_trim;
     } else {
       scavenge_pwm_trim += 0.04f; // Continuous increment (+0.08%/s)
@@ -306,16 +298,28 @@ void loop_autoscavengecontrol(void)
   }
   scavenge_last_tank_full = tank_full;
 
-  // Combine base + seeking trim, clamped to physical [0%, 100%] PWM range.
-  // In WASH_HEATER_CTRL, cap recovery at 82% to avoid cavitation; any tank deficit is balanced by trimming delivery flow.
-  float max_rec_pwm = (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) ? 82.0f : 100.0f;
-  float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, max_rec_pwm);
-  scavenge_pwm_trim = raw_target_pwm - base_pwm;
+  if (in_heater_ctrl) {
+    // Mode 2 (WASH_HEATER_CTRL):
+    // Recovery is fixed at 80% PWM. Tank level is maintained by modulating delivery:
+    // delivery = (recovery - trim) / 1.13
+    float target_del_pwm = constrain((FIXED_HEATER_REC_PWM - scavenge_pwm_trim) / 1.13f, 25.0f, 75.0f);
+    setpump_perc(RPUMPR, FIXED_HEATER_REC_PWM);
+    setpump_perc(RPUMPD, target_del_pwm);
+    scavenge_last_del_pwm = target_del_pwm;
 
-  // Direct, lag-free hardware command: Recovery tracks delivery in exact lockstep without phase delay
-  setpump_perc(RPUMPR, raw_target_pwm);
+    // Keep wash_locked_flow in sync for display & telemetry
+    wash_locked_flow = getlpmFrompwm(target_del_pwm, modeld);
+  } else {
+    // Mode 1 (STATE_WARM & WASH_FLOW_CTRL):
+    // Delivery is determined by flow PID or state. Recovery tracks delivery:
+    // recovery = (delivery * 1.13) + trim
+    float base_pwm = (del_pwm >= 15.0f) ? (del_pwm * 1.13f) : 20.0f;
+    float raw_target_pwm = constrain(base_pwm + scavenge_pwm_trim, 0.0f, 100.0f);
+    scavenge_pwm_trim = raw_target_pwm - base_pwm; // Anti-windup clamping
+    setpump_perc(RPUMPR, raw_target_pwm);
+    scavenge_last_del_pwm = del_pwm;
+  }
 }
-
 
 // ----------------------------------------------------------------------
 //   Auto states
@@ -741,47 +745,14 @@ void loop_autowash(void)
     }
 
     case WASH_HEATER_CTRL: {
-      static unsigned long last_del_level_seek_time = 0;
-      static bool last_tank_full_wash_heater = false;
-
       if( just_entered ) {
-        btLog("WASH_HEATER_CTRL: Heater-based temperature control active. Locked flow=" + String(wash_locked_flow, 2) + " LPM. Fixing Recovery at 80% PWM.");
+        btLog("WASH_HEATER_CTRL: Heater-based temperature control active. Fixing Recovery at " + 
+              String(FIXED_HEATER_REC_PWM, 0) + "% PWM; Delivery dynamically balances tank level.");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
         auto_scavengecontrolenable = 1;
-        setpump_perc(RPUMPR, 80.0f);
-        setpump_lpm(RPUMPD, wash_locked_flow);
         temp_controlmode = TCHEATER;
-        last_del_level_seek_time = millis();
-        last_tank_full_wash_heater = tank_full;
-      }
-
-      // Tank level control via delivery flow modulation around top float switch (evaluated every 500ms):
-      // When tank_full is false, delivery exceeds recovery throughput -> ramp delivery flow down.
-      // When tank_full is true, recovery has caught up -> gently allow delivery to creep up.
-      if (millis() - last_del_level_seek_time >= 500) {
-        last_del_level_seek_time = millis();
-
-        if (tank_full) {
-          if (!last_tank_full_wash_heater) {
-            // Level just recovered to top float: small step up
-            wash_locked_flow = min(7.5f, wash_locked_flow + 0.05f);
-          } else {
-            // Gentle continuous creep upward (+0.02 LPM/s = +0.01 LPM per 500ms)
-            wash_locked_flow = min(7.5f, wash_locked_flow + 0.01f);
-          }
-        } else {
-          if (last_tank_full_wash_heater) {
-            // Level just dropped below top float: immediate hysteresis step down
-            wash_locked_flow = max(3.6f, wash_locked_flow - 0.08f);
-          } else {
-            // Continuous downward seeking (-0.05 LPM/s = -0.025 LPM per 500ms)
-            wash_locked_flow = max(3.6f, wash_locked_flow - 0.025f);
-          }
-        }
-        last_tank_full_wash_heater = tank_full;
-        setpump_lpm(RPUMPD, wash_locked_flow);
       }
 
       // Thermal fallback guard: If heaters are maxed out (SSR duty >= 98% and Aux ON = 6.0 kW)
