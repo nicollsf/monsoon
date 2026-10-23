@@ -113,23 +113,25 @@ The project uses a decoupled "Gatekeeper" model to manage high-power hardware sa
   * Auto top-up configured with **120s** inactivity timeout (`auto_wtopup_timeout = 120000;`) and **30s** repeat pulse guard (`auto_wtopup_interval = 30000;`).
   * **Regime 1 (`WASH_FLOW_CTRL` - Flow-Based Temperature Control):**
     * Heaters locked on **FULL 6.0 kW** power (Main 4kW SSR @ 100% + Aux 2kW ON).
-    * Damped inner PID (`TCSPEED`, evaluated every 2.5s, limits `[3.0, 8.5]` LPM with $0.12\text{ LPM/s}$ slew rate limiting) hunts for maximum drenching flow ("Monsoon" experience) by modulating delivery pump flow to reject the full 6 kW heat input and clamp water at `temp_setpoint`.
-    * **Hydraulic Transition Trigger:** Evaluates recovery pump load (`sc_setperc[RPUMPR]`) and heater headroom. When recovery PWM $> 78\%$ continuously for $\ge 8.0\text{s}$ after $\ge 30\text{s}$ settling in `WASH_FLOW_CTRL`, AND there is verified heater headroom ($T \ge T_{\text{setpoint}} - 0.5^\circ\text{C}$ and $P_{\text{expected}} \le 5.5\text{ kW}$), the system measures and latches `wash_locked_flow = constrain(flow_lpm0, 3.5f, 8.5f)` and executes a bumpless transition to Regime 2.
+    * Damped inner PID (`TCSPEED`, evaluated every 2500ms, $Kp=0.35$, $Ki=0.015$, $Kd=0.15$, limits `[3.6, 8.5]` LPM with mathematically strict $0.12\text{ LPM/s}$ continuous slew rate limiting) hunts for maximum drenching flow ("Monsoon" experience) by modulating delivery pump flow to reject the full 6 kW heat input and clamp water at `temp_setpoint`.
+    * **Hydraulic Transition Trigger:** Evaluates recovery pump load (`sc_setperc[RPUMPR]`) and heater headroom. When recovery PWM $> 78\%$ continuously for $\ge 8.0\text{s}$ after $\ge 30\text{s}$ settling in `WASH_FLOW_CTRL`, AND there is verified heater headroom ($T \ge T_{\text{setpoint}} - 0.5^\circ\text{C}$), the system measures and latches `wash_locked_flow = constrain(flow_lpm0, 3.6f, 7.5f)` and executes a bumpless transition to Regime 2.
     * *Winter Mode:* Under high environmental heat loss where recovery never reaches 78% or heater headroom is absent, the system remains stably in `WASH_FLOW_CTRL` for the entire shower.
   * **Regime 2 (`WASH_HEATER_CTRL` - Heater-Based Temperature Control):**
-    * **Delivery Flow:** Locked steady at `wash_locked_flow` LPM (`setpump_lpm(RPUMPD, wash_locked_flow)`), maintaining constant maximum flow without hydraulic fighting.
-    * **Manual GUI Nudge:** The GUI delivery pump up/down buttons (`'c'` / `'C'`, $\pm 5\%$ PWM) remain fully active in this substate and directly update `wash_locked_flow = getlpmFrompwm(sc_setperc[RPUMPD], modeld)` to allow real-time manual tuning of heater headroom.
-    * **Bumpless Transfer:** On transition, pre-seeds the heater PID integral accumulator with the calibrated steady-state feedforward power $P_{\text{ff}} = UA_{\text{eff}} \times (T_{\text{setpoint}} - T_{\text{cold}}) / 1000\text{ kW}$ ($\text{initial\_duty} \approx 78\dots 85\%$).
-    * **Heater PID (`TCHEATER`):** Smooth, slow PID loop (sample time 2000ms, DIRECT mode, limits `[0.05, 1.0]`) modulating Main SSR duty cycle with Aux 2kW ON, providing seamless continuous heat from $2.0\text{ kW}$ to $6.0\text{ kW}$.
+    * **Fixed Recovery Pump:** Recovery pump is fixed at **$80.0\%\text{ PWM}$** (maximum safe, non-cavitating throughput $\sim 9.4\text{ LPM}$).
+    * **Delivery Pump Tank Level Seeking (Algebraic Duality):** Tank level control is transferred to the delivery pump using the inverse level relation: $\text{PWM}_{\text{delivery}} = \frac{80.0 - \text{scavenge\_pwm\_trim}}{1.13}$. If `tank_full == false`, delivery gently sheds flow to balance throughput; if `tank_full == true`, delivery creeps up towards maximum drenching flow.
+    * **Manual GUI Nudge:** The GUI delivery pump up/down buttons (`'c'` / `'C'`, $\pm 5\%$ PWM) remain fully active and directly shift `scavenge_pwm_trim` by $\mp (1.13 \times 5\%)$, moving the seeking baseline while maintaining level regulation.
+    * **Bumpless Transfer:** On transition, pre-seeds Main SSR duty according to excess temp above setpoint ($80\%$ at setpoint, scaled down if hotter).
+    * **Heater PID (`TCHEATER`):** Responsive PID loop (sample time 1500ms, DIRECT mode, $Kp=0.25$, $Ki=0.008$, $Kd=0.50$, limits `[0.05, 1.0]`) modulating Main SSR duty cycle with Aux 2kW ON, providing continuous heat from $2.0\text{ kW}$ to $6.0\text{ kW}$.
     * **Thermal Saturation Fallback Guard:** If heaters are saturated at 100% (6.0 kW: Main SSR $\ge 98\%$ + Aux ON) and temperature remains below setpoint ($T < T_{\text{setpoint}} - 0.3^\circ\text{C}$) continuously for $\ge 30\text{s}$, the system executes a bumpless fallback to `WASH_FLOW_CTRL` (with 60s re-transition cooldown) so `TCSPEED` can gently trim flow to restore setpoint temperature.
-    * **Hydraulic Safety Backstop:** If recovery load climbs to $\ge 88\%$ PWM (e.g. progressive drain filter restriction), `wash_locked_flow` is gently trimmed down by $0.05\text{ LPM/s}$ to guarantee pan safety.
   * **Dual Ambient Tracking (90-Minute Rule):** Tracks both cold fill water temperature ($T_{\text{water}}$, updated in `FILL_FULL` if $>90$m since last shower) and idle air temperature ($T_{\text{air}}$, updated in `STATE_OFF` if $>90$m). Persisted to NVRAM Preferences (`monsoon_env`).
-  * **Float-Centric Scavenge Balancing:** In `loop_autoscavengecontrol()`, the recovery pump uses direct PWM balance control without `get_recovery_pwm_from_flow()` or flow-meter integration:
-    * Proportional delivery tracking base: $\text{PWM}_{\text{base}} = 1.35 \times \text{PWM}_{\text{del}}$.
-    * While `tank_full == false`: Adaptive trim creeps upward at $+0.05\%\text{ PWM/sec}$ ($+3\%\text{/min}$, authority up to $+25\%$) to maintain pan buffer and naturally overcome progressive filter clogging.
-    * When `tank_full == true`: Steps down $-2.0\%$ immediately, then decrements at $-0.10\%\text{ PWM/sec}$ (clamped to $-8\%$) to settle level $\sim 15\text{mm}$ below the top float switch without surging or overflowing.
-    * Direct, lag-free output: Tracks delivery in exact lockstep without phase lag or fighting filters (delivery itself handles flow rate limiting).
-    * Unified across `STATE_WARM` (`WARM_RAMP`, `WARM_HOLD`) and `STATE_WASH`.
+  * **Unified Dual-Mode Float-Centric Balancing (`loop_autoscavengecontrol`):**
+    * Shared state variable `scavenge_pwm_trim` running symmetric seeking dynamics:
+      * Continuous ramp: $\pm 0.04\%$ per $500\text{ ms} = \mathbf{\pm 0.08\%/\text{s}}$ ($4.8\%/\text{min}$).
+      * Hysteresis step: $\mathbf{\pm 1.5\%\text{ PWM}}$ step on float state flip.
+      * Anti-windup midpoint return: rolls back $\mathbf{50\%}$ of the accumulated half-cycle ramp upon float transition.
+    * **Mode 1 (`WARM` & `WASH_FLOW_CTRL`):** Recovery tracks delivery: $\text{PWM}_{\text{recovery}} = (1.13 \times \text{PWM}_{\text{delivery}}) + \text{scavenge\_pwm\_trim}$.
+    * **Mode 2 (`WASH_HEATER_CTRL`):** Recovery fixed at $80.0\%$, delivery modulates level: $\text{PWM}_{\text{delivery}} = \frac{80.0 - \text{scavenge\_pwm\_trim}}{1.13}$.
+    * Stateless across showers (resets only in `STATE_OFF` and `STATE_FILL`), preserved across `WARM` $\rightarrow$ `WASH`.
 * **Flow & Temperature Sensor Filtering:**
   * 3-trace telemetry stream (`*N<flow_del>,<flow_rec_raw>,<flow_rec_est>*`) with 5-point piecewise linear recovery calibration.
   * 9-sample ADC median filter in `get_tempsens1()`.
