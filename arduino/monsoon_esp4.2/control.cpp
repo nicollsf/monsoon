@@ -130,6 +130,8 @@ void loop_pumps_and_valves(void)
   if (tank_full) {
     if ((auto_state == STATE_CALIBP && auto_substate == CALIBP_CALIB_SCAVENGE) || 
         auto_state == STATE_CALIBF || 
+        auto_state == STATE_WARM ||
+        auto_state == STATE_WASH ||
         auto_scavengecontrolenable) {
       pump_safety_veto = false;
     } else {

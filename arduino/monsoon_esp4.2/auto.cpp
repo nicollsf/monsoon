@@ -251,6 +251,15 @@ void loop_autoscavengecontrol(void)
 
   if( getpump_en(RPUMPR) == ROFF ) setpump_en(RPUMPR, RON);
 
+  // In WASH_HEATER_CTRL: Recovery pump is locked at a fixed 80% PWM.
+  // Tank level is controlled by delivery flow modulation.
+  if (auto_state == STATE_WASH && auto_substate == WASH_HEATER_CTRL) {
+    setpump_perc(RPUMPR, 80.0f);
+    scavenge_last_del_pwm = sc_setperc[RPUMPD];
+    scavenge_last_tank_full = tank_full;
+    return;
+  }
+
   unsigned long now = millis();
 
   // 1. Proportional Delivery Speed Tracking (Feedforward Base / Initialisation):
@@ -709,8 +718,8 @@ void loop_autowash(void)
         if (rec_high_start == 0) rec_high_start = millis();
         if (millis() - rec_high_start >= 8000) {
           rec_high_start = 0;
-          // Cap locked flow to 6.5 LPM (or current flow - 0.2 LPM) so recovery operates comfortably <= 78% without cavitation
-          wash_locked_flow = constrain(min(flow_lpm0 - 0.2f, 6.5f), 3.6f, 6.5f);
+          // Seed locked flow from current flow (clamped between 3.6 and 7.5 LPM)
+          wash_locked_flow = constrain(flow_lpm0, 3.6f, 7.5f);
 
           // Pre-seed Main SSR duty (~80% at setpoint, scaled down immediately if water is currently hotter than setpoint)
           float over_temp = max(0.0f, temp1 - temp_setpoint);
@@ -732,29 +741,47 @@ void loop_autowash(void)
     }
 
     case WASH_HEATER_CTRL: {
+      static unsigned long last_del_level_seek_time = 0;
+      static bool last_tank_full_wash_heater = false;
+
       if( just_entered ) {
-        btLog("WASH_HEATER_CTRL: Heater-based temperature control active. Locked flow=" + String(wash_locked_flow, 2) + " LPM.");
+        btLog("WASH_HEATER_CTRL: Heater-based temperature control active. Locked flow=" + String(wash_locked_flow, 2) + " LPM. Fixing Recovery at 80% PWM.");
         setrelay_en(RPDELIVER, RON);
         setpump_en(RPUMPD, RON);
         setpump_en(RPUMPR, RON);
         auto_scavengecontrolenable = 1;
+        setpump_perc(RPUMPR, 80.0f);
         setpump_lpm(RPUMPD, wash_locked_flow);
         temp_controlmode = TCHEATER;
+        last_del_level_seek_time = millis();
+        last_tank_full_wash_heater = tank_full;
       }
 
-      // Maintain locked delivery flow
-      setpump_lpm(RPUMPD, wash_locked_flow);
+      // Tank level control via delivery flow modulation around top float switch (evaluated every 500ms):
+      // When tank_full is false, delivery exceeds recovery throughput -> ramp delivery flow down.
+      // When tank_full is true, recovery has caught up -> gently allow delivery to creep up.
+      if (millis() - last_del_level_seek_time >= 500) {
+        last_del_level_seek_time = millis();
 
-      // Hydraulic balance & anti-starvation guard:
-      // If recovery pump is operating near ceiling (>= 80% PWM) and tank level is lost (!tank_full),
-      // or if recovery hits >= 85%, trim delivery flow downward to balance throughput and prevent tank starvation
-      static unsigned long last_rec_guard = 0;
-      if (millis() - last_rec_guard >= 1000) {
-        last_rec_guard = millis();
-        if ((sc_setperc[RPUMPR] >= 80.0f && !tank_full) || (sc_setperc[RPUMPR] >= 85.0f)) {
-          wash_locked_flow = max(3.5f, wash_locked_flow - 0.04f); // Trim 0.04 LPM/s
-          btLog("WASH_HEATER_CTRL: High recovery load (" + String(sc_setperc[RPUMPR], 0) + "%" + (!tank_full ? " low level" : "") + "). Trimming delivery flow to " + String(wash_locked_flow, 2) + " LPM.");
+        if (tank_full) {
+          if (!last_tank_full_wash_heater) {
+            // Level just recovered to top float: small step up
+            wash_locked_flow = min(7.5f, wash_locked_flow + 0.05f);
+          } else {
+            // Gentle continuous creep upward (+0.02 LPM/s = +0.01 LPM per 500ms)
+            wash_locked_flow = min(7.5f, wash_locked_flow + 0.01f);
+          }
+        } else {
+          if (last_tank_full_wash_heater) {
+            // Level just dropped below top float: immediate hysteresis step down
+            wash_locked_flow = max(3.6f, wash_locked_flow - 0.08f);
+          } else {
+            // Continuous downward seeking (-0.05 LPM/s = -0.025 LPM per 500ms)
+            wash_locked_flow = max(3.6f, wash_locked_flow - 0.025f);
+          }
         }
+        last_tank_full_wash_heater = tank_full;
+        setpump_lpm(RPUMPD, wash_locked_flow);
       }
 
       // Thermal fallback guard: If heaters are maxed out (SSR duty >= 98% and Aux ON = 6.0 kW)
@@ -805,8 +832,8 @@ void loop_autowash(void)
         Serial.printf("WASH_DBG (FLOW_CTRL): SP=%.2f, Temp=%.2f, FlowPID_Out=%.2f LPM, PumpD=%.1f%%, PumpR=%.1f%%, 6kW FULL\n",
           temp_setpoint, temp1, tc_pidoutput, sc_setperc[RPUMPD], sc_setperc[RPUMPR]);
       } else {
-        Serial.printf("WASH_DBG (HEATER_CTRL): SP=%.2f, Temp=%.2f, LockedFlow=%.2f LPM, SSR_Duty=%.1f%%, PumpR=%.1f%%\n",
-          temp_setpoint, temp1, wash_locked_flow, ssr_main_duty * 100.0f, sc_setperc[RPUMPR]);
+        Serial.printf("WASH_DBG (HEATER_CTRL): SP=%.2f, Temp=%.2f, LockedFlow=%.2f LPM, SSR_Duty=%.1f%%, PumpR=%.1f%%, TankFull=%d\n",
+          temp_setpoint, temp1, wash_locked_flow, ssr_main_duty * 100.0f, sc_setperc[RPUMPR], tank_full ? 1 : 0);
       }
     }
 
